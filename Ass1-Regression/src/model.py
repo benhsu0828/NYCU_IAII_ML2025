@@ -195,42 +195,42 @@ class RegressionModels:
                     self.scaler = StandardScaler()
                 
                 def _build_model(self):
-                    # model = Sequential([
-                    #         Dense(256, activation='relu', input_shape=(self.input_dim,)),
-                    #         Dropout(0.3),
-                    #         Dense(512, activation='relu'),
-                    #         Dropout(0.3),
-                    #         Dense(256, activation='relu'),
-                    #         Dropout(0.3),
-                    #         Dense(128, activation='relu'),
-                    #         Dropout(0.2),
-                    #         Dense(64, activation='relu'),
-                    #         Dense(1, activation='linear')
-                    #     ])
-
-                    # V3: BatchNorm 
                     model = Sequential([
-                        Dense(512, input_shape=(self.input_dim,)),
-                        BatchNormalization(),
-                        Activation('relu'),
-                        Dropout(0.3),
+                            Dense(256, activation='relu', input_shape=(self.input_dim,)),
+                            Dropout(0.3),
+                            Dense(512, activation='relu'),
+                            Dropout(0.3),
+                            Dense(256, activation='relu'),
+                            Dropout(0.3),
+                            Dense(128, activation='relu'),
+                            Dropout(0.2),
+                            Dense(64, activation='relu'),
+                            Dense(1, activation='linear')
+                        ])
+
+                    # # V3: BatchNorm 
+                    # model = Sequential([
+                    #     Dense(512, input_shape=(self.input_dim,)),
+                    #     BatchNormalization(),
+                    #     Activation('relu'),
+                    #     Dropout(0.3),
                         
-                        Dense(256),
-                        BatchNormalization(), 
-                        Activation('relu'),
-                        Dropout(0.3),
+                    #     Dense(256),
+                    #     BatchNormalization(), 
+                    #     Activation('relu'),
+                    #     Dropout(0.3),
                         
-                        Dense(128),
-                        BatchNormalization(),
-                        Activation('relu'), 
-                        Dropout(0.2),
+                    #     Dense(128),
+                    #     BatchNormalization(),
+                    #     Activation('relu'), 
+                    #     Dropout(0.2),
                         
-                        Dense(64),
-                        BatchNormalization(),
-                        Activation('relu'),
+                    #     Dense(64),
+                    #     BatchNormalization(),
+                    #     Activation('relu'),
                         
-                        Dense(1, activation='linear')
-                    ])
+                    #     Dense(1, activation='linear')
+                    # ])
                     
                     
                     model.compile(

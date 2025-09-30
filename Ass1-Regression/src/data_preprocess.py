@@ -298,7 +298,7 @@ def process_transaction_date(df, date_column='交易年月日', method='multiple
     if method == 'multiple_features':
         # 方法3: 拆分為多個特徵（推薦）
         df_result[f'{date_column}_年'] = df_result['parsed_date'].dt.year
-        df_result[f'{date_column}_月'] = df_result['parsed_date'].dt.month
+        # df_result[f'{date_column}_月'] = df_result['parsed_date'].dt.month
         # df_result[f'{date_column}_日'] = df_result['parsed_date'].dt.day
         # df_result[f'{date_column}_星期'] = df_result['parsed_date'].dt.dayofweek  # 0=週一
         df_result[f'{date_column}_季度'] = df_result['parsed_date'].dt.quarter
