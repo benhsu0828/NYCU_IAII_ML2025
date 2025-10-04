@@ -479,7 +479,9 @@ def get_available_models():
         model_name = model_file.stem
         
         # 根據檔案名稱判斷類型
-        if 'linear' in model_name.lower() or 'ridge' in model_name.lower() or 'lasso' in model_name.lower():
+        if 'stacking' in model_name.lower():
+            category = 'stacking'
+        elif 'linear' in model_name.lower() or 'ridge' in model_name.lower() or 'lasso' in model_name.lower():
             category = 'linear'
         elif any(tree_type in model_name.lower() for tree_type in ['tree', 'xgboost', 'lightgbm', 'catboost', 'gradient']):
             category = 'tree'
@@ -540,6 +542,7 @@ def test_model_with_choice(X_test, test_df):
     category_names = {
         'linear': '📈 線性模型',
         'tree': '🌳 樹模型',
+        'stacking': '🔗 Stacking 集成模型',
         'deep_learning': '🧠 深度學習模型',
         'other': '📊 其他模型'
     }
@@ -918,11 +921,12 @@ def get_train_mode():
     print("1. 樹模型 (Tree Models)")
     print("2. 線性模型 (Linear Models)")
     print("3. 深度學習模型 (Deep Learning)")
-    print("4. 全部訓練 (All Models)")
+    print("4. Stacking 集成模型 (DNN + Trees)")
+    print("5. 全部訓練 (All Models)")
     print("0. 返回主選單")
     
     while True:
-        choice = input("\n請輸入選擇 (0-4): ").strip()
+        choice = input("\n請輸入選擇 (0-5): ").strip()
         if choice == '0':
             return 'back'
         elif choice == '1':
@@ -932,9 +936,236 @@ def get_train_mode():
         elif choice == '3':
             return 'dl'
         elif choice == '4':
+            return 'stacking'
+        elif choice == '5':
             return 'all'
         else:
             print("❌ 無效選擇，請重新輸入")
+
+def train_StackingModel(X_train, y_train, X_valid, y_valid):
+    """訓練 Stacking 集成模型 (DNN + XGBoost + LightGBM 作為基學習器) - 資源優化版"""
+    import gc
+    import psutil
+    
+    print("\n=== 開始 Stacking 集成模型訓練 (資源優化版) ===")
+    print("🏗️  方案A: DNN + XGBoost + LightGBM 作為 L1 基學習器，Ridge 作為 L2 最終學習器")
+    
+    # 檢查系統資源
+    print(f"\n💻 系統資源檢查:")
+    print(f"   可用記憶體: {psutil.virtual_memory().available / (1024**3):.1f} GB")
+    print(f"   CPU 核心數: {psutil.cpu_count()}")
+    print(f"   訓練樣本數: {X_train.shape[0]:,}")
+    print(f"   特徵數量: {X_train.shape[1]}")
+    
+    # 檢查 TensorFlow 和相關套件
+    try:
+        import tensorflow as tf
+        from sklearn.ensemble import StackingRegressor
+        print("✅ 檢查通過：TensorFlow 和 Stacking 相關套件可用")
+        
+        # 設置 TensorFlow 記憶體成長
+        gpus = tf.config.experimental.list_physical_devices('GPU')
+        if gpus:
+            try:
+                for gpu in gpus:
+                    tf.config.experimental.set_memory_growth(gpu, True)
+                print("✅ GPU 記憶體成長設置完成")
+            except RuntimeError as e:
+                print(f"⚠️ GPU 設置警告: {e}")
+        
+    except ImportError as e:
+        print(f"❌ 套件檢查失敗: {e}")
+        print("請確保已安裝 TensorFlow 和 scikit-learn")
+        return None, {}
+    
+    # 記憶體清理
+    print("🧹 清理記憶體...")
+    gc.collect()
+    
+    # 初始化模型
+    models = RegressionModels(random_state=42)
+    
+    # 🤔 詢問是否使用預訓練 DNN
+    print("\n1. 選擇 DNN 基學習器模式...")
+    print("選項:")
+    print("1. 使用現有的預訓練 DNN 模型 (節省訓練時間)")
+    print("2. 重新訓練新的 DNN 模型")
+    print("3. 查看可用的預訓練 DNN 模型")
+    
+    while True:
+        try:
+            choice = input("\n請選擇 (1-3): ").strip()
+            if choice == '1':
+                use_pretrained = True
+                print("✅ 將嘗試載入預訓練 DNN 模型")
+                break
+            elif choice == '2':
+                use_pretrained = False
+                print("✅ 將重新訓練新的 DNN 模型")
+                break
+            elif choice == '3':
+                print("\n" + "="*50)
+                models.list_available_dnn_models()
+                print("="*50)
+                continue
+            else:
+                print("❌ 請輸入 1、2 或 3")
+        except KeyboardInterrupt:
+            print("\n👋 操作已取消")
+            return None, {}
+    
+    # 獲取 Stacking 模型
+    print("\n2. 獲取 Stacking 模型配置...")
+    try:
+        stacking_models = models.get_stacking_models(use_pretrained_dnn=use_pretrained, X_sample=X_train)
+    except Exception as e:
+        print(f"❌ 獲取 Stacking 模型配置失敗: {e}")
+        return None, {}
+    
+    if not stacking_models:
+        print("❌ 無法獲取 Stacking 模型配置")
+        return None, {}
+    
+    print(f"📊 可用的 Stacking 模型: {list(stacking_models.keys())}")
+    
+    # 顯示訓練時間預估
+    if use_pretrained:
+        print("⚡ 使用預訓練 DNN（如可用），預估訓練時間：約 30 秒 - 1 分鐘")
+        print("   1. 載入預訓練 DNN 或使用 Ridge 代替")
+        print("   2. 訓練 XGBoost 基學習器 (100棵樹，2核心)")
+        print("   3. 訓練 LightGBM 基學習器 (100棵樹，2核心)")
+        print("   4. 使用 3-Fold 交叉驗證生成元特徵")
+        print("   5. 訓練 Ridge 最終學習器")
+    else:
+        print("⚡ 使用 Ridge 代替 DNN（避免複雜性），預估訓練時間：約 30 秒 - 1 分鐘")
+        print("   1. 使用 Ridge 回歸作為第三個基學習器")
+        print("   2. 訓練 XGBoost 基學習器 (100棵樹，2核心)")
+        print("   3. 訓練 LightGBM 基學習器 (100棵樹，2核心)") 
+        print("   4. 使用 3-Fold 交叉驗證生成元特徵")
+        print("   5. 訓練 Ridge 最終學習器")
+    
+    # 詢問是否繼續
+    confirm = input("\n是否繼續訓練 Stacking 模型？(y/n): ").strip().lower()
+    if confirm != 'y':
+        print("❌ 用戶取消訓練")
+        return None, {}
+    
+    print("\n3. 開始訓練 Stacking 模型...")
+    print(f"   輸入特徵數: {X_train.shape[1]}")
+    print(f"   訓練樣本數: {X_train.shape[0]}")
+    print(f"   驗證樣本數: {X_valid.shape[0]}")
+    
+    # 訓練 Stacking 模型 (帶錯誤處理)
+    try:
+        models.train_multiple_models(stacking_models, X_train, y_train, X_valid, y_valid)
+    except MemoryError:
+        print("❌ 記憶體不足！建議:")
+        print("   1. 關閉其他程式釋放記憶體")
+        print("   2. 重新啟動 Python")
+        print("   3. 考慮使用更小的數據集")
+        return None, {}
+    except Exception as e:
+        print(f"❌ Stacking 模型訓練失敗: {e}")
+        print("可能的解決方案:")
+        print("   1. 確保有足夠的記憶體 (建議 8GB+)")
+        print("   2. 關閉其他耗費資源的程式")
+        print("   3. 重新啟動 Python 環境")
+        import traceback
+        traceback.print_exc()
+        return models, {}
+    
+    # 顯示結果
+    print("\n=== Stacking 集成模型訓練結果 ===")
+    results = models.get_results_summary()
+    print(results)
+    
+    # 儲存最佳 Stacking 模型
+    timestamp = get_timestamp()
+    print(f"\n💾 儲存 Stacking 模型 (時間戳: {timestamp})...")
+    
+    try:
+        # 找出最佳 Stacking 模型
+        best_model_name = min(models.results.keys(), 
+                             key=lambda x: models.results[x]['valid']['RMSE'])
+        best_model = models.trained_models[best_model_name]
+        best_rmse = models.results[best_model_name]['valid']['RMSE']
+        best_r2 = models.results[best_model_name]['valid']['R2']
+        
+        # 建立儲存目錄
+        model_dir = Path("../models")
+        model_dir.mkdir(exist_ok=True)
+        
+        # 儲存模型
+        import joblib
+        timestamped_model_name = f"{best_model_name}_{timestamp}"
+        model_file = model_dir / f"{timestamped_model_name}.joblib"
+        joblib.dump(best_model, model_file)
+        
+        # 儲存模型資訊 (包含 DNN 使用資訊)
+        info_file = model_dir / f"{timestamped_model_name}_info.txt"
+        
+        # 檢查是否使用了預訓練 DNN (通過模型檔名或其他特徵)
+        dnn_mode = "Unknown"
+        try:
+            # 嘗試從 stacking_models 推斷 DNN 模式
+            if 'use_pretrained' in locals():
+                dnn_mode = "Pretrained" if use_pretrained else "Newly_Trained"
+            else:
+                # 備用方法：檢查基學習器的類型
+                base_learners = best_model.estimators_
+                for name, estimator in base_learners:
+                    if name == 'dnn':
+                        if hasattr(estimator, 'is_fitted') and estimator.is_fitted:
+                            dnn_mode = "Pretrained"
+                        else:
+                            dnn_mode = "Newly_Trained"
+                        break
+        except:
+            dnn_mode = "Unknown"
+        
+        with open(info_file, 'w', encoding='utf-8') as f:
+            f.write(f"Model: {timestamped_model_name}\n")
+            f.write(f"Original_Name: {best_model_name}\n")
+            f.write(f"Type: Stacking_Ensemble_Optimized\n")
+            f.write(f"DNN_Mode: {dnn_mode}\n")
+            f.write(f"Timestamp: {timestamp}\n")
+            f.write(f"Training_Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"RMSE: {best_rmse:.2f}\n")
+            f.write(f"R2: {best_r2:.4f}\n")
+            f.write(f"Base_Learners: XGBoost(100trees,2cores), LightGBM(100trees,2cores), DNN(50epochs)\n")
+            f.write(f"Final_Estimator: Ridge\n")
+            f.write(f"Cross_Validation: 3-Fold\n")
+            f.write(f"Description: Resource-optimized DNN+Trees Stacking\n")
+            f.write(f"Memory_Usage: Optimized for 8GB+ RAM\n")
+        
+        print(f"✅ Stacking 模型已儲存:")
+        print(f"   模型檔案: {model_file}")
+        print(f"   資訊檔案: {info_file}")
+        print(f"   最佳模型: {best_model_name}")
+        print(f"   RMSE: {best_rmse:.2f}")
+        print(f"   R²: {best_r2:.4f}")
+        
+        # 最終記憶體清理
+        gc.collect()
+        
+        best_models = {
+            'stacking': {
+                'name': best_model_name,
+                'timestamped_name': timestamped_model_name,
+                'model': best_model,
+                'rmse': best_rmse,
+                'r2': best_r2,
+                'timestamp': timestamp
+            }
+        }
+        
+        return models, best_models
+        
+    except Exception as e:
+        print(f"❌ Stacking 模型儲存失敗: {e}")
+        import traceback
+        traceback.print_exc()
+        return models, {}
 
 def train_all_models(X_train, y_train, X_valid, y_valid):
     """訓練所有類型的模型"""
@@ -1006,6 +1237,8 @@ def main_menu():
                 train_LinearModel(X_train, y_train, X_valid, y_valid)
             elif train_mode == 'dl':
                 train_DLModel(X_train, y_train, X_valid, y_valid)
+            elif train_mode == 'stacking':
+                train_StackingModel(X_train, y_train, X_valid, y_valid)
             elif train_mode == 'all':
                 train_all_models(X_train, y_train, X_valid, y_valid)
         

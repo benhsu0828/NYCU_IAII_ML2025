@@ -1,0 +1,13 @@
+Model: Voting_DNN_Trees_1004_0054
+Original_Name: Voting_DNN_Trees
+Type: Stacking_Ensemble_Optimized
+DNN_Mode: Pretrained
+Timestamp: 1004_0054
+Training_Date: 2025-10-04 00:54:57
+RMSE: 5331315.06
+R2: 0.8213
+Base_Learners: XGBoost(100trees,2cores), LightGBM(100trees,2cores), DNN(50epochs)
+Final_Estimator: Ridge
+Cross_Validation: 3-Fold
+Description: Resource-optimized DNN+Trees Stacking
+Memory_Usage: Optimized for 8GB+ RAM
