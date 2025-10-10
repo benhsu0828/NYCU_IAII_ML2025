@@ -75,8 +75,7 @@ conda env export --name NYCUML > environment.yml
 
 ```powershell
 cd src
-python main.py
-# main.py 啟動後會在互動式選單呼叫前處理或直接載入 processed 資料
+python data_preproccess.py
 ```
 
 5) 訓練模型（互動式）
@@ -93,7 +92,7 @@ python main.py
 ```powershell
 cd src
 python main.py
-# 選擇 train -> tree
+# 透過輸入數字選項，選擇 train -> tree
 ```
 
 6) 測試與產出預測
