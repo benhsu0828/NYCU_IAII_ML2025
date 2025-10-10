@@ -13,6 +13,7 @@ https://www.kaggle.com/competitions/nycu-iaii-ml-2025-regression/overview
 
 目錄結構（重點）
 ---
+```
 Ass1-Regression/
 │
 ├── Dataset/ or data/         # 原始與已處理資料（raw/ processed/）
@@ -29,7 +30,7 @@ Ass1-Regression/
 ├── requirements.txt          # 建議儲存的 Python 套件清單
 ├── environment.yml           # （可選）conda environment 匯出檔
 └── README.md                 # 專案說明（本檔案）
-
+```
 快速開始（Step-by-step）
 ---
 以下示範在 Windows + PowerShell 下的常用流程。請先確定你位於專案根目錄（含 `src/`、`models/` 等）。
