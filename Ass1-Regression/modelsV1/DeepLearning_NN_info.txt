@@ -1,0 +1,5 @@
+Model: DeepLearning_NN
+Type: DeepLearning
+Input_dim: 286
+Keras_model: DeepLearning_NN_keras
+Scaler: DeepLearning_NN_scaler.joblib

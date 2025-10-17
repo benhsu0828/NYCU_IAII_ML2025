@@ -1,0 +1,9 @@
+Model: DeepLearning_NN_0923_1855
+Original_Name: DeepLearning_NN
+Timestamp: 0923_1855
+Training_Date: 2025-09-23 18:55:13
+Type: DeepLearning
+Input_dim: 286
+RMSE: 10383181.70
+Keras_model: DeepLearning_NN_0923_1855_keras
+Scaler: DeepLearning_NN_0923_1855_scaler.joblib
