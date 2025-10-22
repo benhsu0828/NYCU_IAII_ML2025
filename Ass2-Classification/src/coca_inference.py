@@ -1,0 +1,424 @@
+#!/usr/bin/env python3
+"""
+🔮 CoCa 模型推理工具 - Mac 版本
+
+功能：
+- 載入訓練好的 CoCa 分類器
+- 從 Dataset/test 目錄讀取測試圖片
+- 輸出 CSV 格式結果：id, character
+- 針對 Mac 系統優化
+"""
+
+import torch
+import torch.nn as nn
+import torchvision.transforms as transforms
+import os
+import glob
+import pandas as pd
+import numpy as np
+from PIL import Image
+from pathlib import Path
+import argparse
+from tqdm import tqdm
+import warnings
+warnings.filterwarnings('ignore')
+
+try:
+    import open_clip
+    print("✅ open_clip 已安裝")
+except ImportError:
+    print("❌ 需要安裝 open_clip:")
+    print("pip install open-clip-torch")
+    raise ImportError("請先安裝 open_clip: pip install open-clip-torch")
+
+class CoCaInference:
+    """
+    CoCa 模型推理器
+    """
+    
+    def __init__(self, model_path, device=None):
+        """
+        初始化推理器
+        
+        Args:
+            model_path: 模型檔案路徑 (.pth)
+            device: 計算設備
+        """
+        # Mac 設備優先級：MPS > CPU
+        if device is None:
+            if torch.backends.mps.is_available():
+                self.device = torch.device("mps")
+            else:
+                self.device = torch.device("cpu")
+        else:
+            self.device = device
+            
+        self.model = None
+        self.class_to_idx = {}
+        self.idx_to_class = {}
+        self.coca_model_name = None
+        self.feature_dim = None
+        
+        print(f"🔮 CoCa 推理器")
+        print(f"🖥️ 使用設備: {self.device}")
+        
+        # 載入模型
+        self.load_model(model_path)
+        
+        # 準備變換
+        self.transform = self._get_inference_transform()
+        
+    def load_model(self, model_path):
+        """載入訓練好的模型"""
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"找不到模型檔案: {model_path}")
+        
+        print(f"📂 載入模型: {model_path}")
+        
+        # 載入 checkpoint
+        checkpoint = torch.load(model_path, map_location='cpu')
+        
+        # 獲取模型資訊
+        self.coca_model_name = checkpoint['coca_model_name']
+        self.feature_dim = checkpoint['feature_dim']
+        num_classes = checkpoint['num_classes']
+        self.class_to_idx = checkpoint['class_to_idx']
+        self.idx_to_class = checkpoint['idx_to_class']
+        
+        print(f"🎯 CoCa 模型: {self.coca_model_name}")
+        print(f"📐 特徵維度: {self.feature_dim}")
+        print(f"📝 類別數: {num_classes}")
+        
+        # 重建 CoCa 特徵提取器
+        coca_model, _, _ = open_clip.create_model_and_transforms(
+            self.coca_model_name,
+            pretrained='laion2b_s13b_b90k' if 'coca' in self.coca_model_name else 'openai'
+        )
+        
+        # 凍結 CoCa 參數
+        for param in coca_model.parameters():
+            param.requires_grad = False
+        
+        # 重建分類頭
+        classifier_head = nn.Sequential(
+            nn.Linear(self.feature_dim, 1024),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(1024, 512),
+            nn.ReLU(), 
+            nn.Dropout(0.2),
+            nn.Linear(512, num_classes)
+        )
+        
+        # 組合完整模型
+        self.model = CoCaClassifier(coca_model, classifier_head)
+        
+        # 載入權重
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.model.to(self.device)
+        self.model.eval()  # 設為推理模式
+        
+        print("✅ 模型載入完成！")
+    
+    def _get_inference_transform(self):
+        """獲取推理用的圖片變換"""
+        return transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=[0.48145466, 0.4578275, 0.40821073],  # CLIP/CoCa 標準
+                std=[0.26862954, 0.26130258, 0.27577711]
+            )
+        ])
+    
+    def predict_single(self, image_path):
+        """
+        預測單張圖片
+        
+        Args:
+            image_path: 圖片路徑
+            
+        Returns:
+            str: 預測的類別名稱
+        """
+        try:
+            # 載入並預處理圖片
+            image = Image.open(image_path).convert('RGB')
+            
+            # 變換圖片
+            input_tensor = self.transform(image).unsqueeze(0).to(self.device)
+            
+            # 推理
+            with torch.no_grad():
+                outputs = self.model(input_tensor)
+                _, predicted = torch.max(outputs.data, 1)
+                predicted_idx = predicted.item()
+                predicted_class = self.idx_to_class[predicted_idx]
+            
+            return predicted_class
+        
+        except Exception as e:
+            print(f"❌ 預測失敗 {image_path}: {e}")
+            return "unknown"
+    
+    def predict_test_dataset(self, test_dir="Dataset/test", output_file="predictions.csv"):
+        """
+        對測試資料集進行批量預測並輸出 CSV
+        
+        Args:
+            test_dir: 測試圖片目錄
+            output_file: 輸出 CSV 檔案名稱
+            
+        Returns:
+            pd.DataFrame: 預測結果
+        """
+        print(f"\n📁 開始處理測試資料集: {test_dir}")
+        
+        # 支援的圖片格式
+        image_extensions = ['*.jpg', '*.jpeg', '*.png', '*.bmp', '*.gif', '*.webp']
+        
+        # 收集所有圖片路徑
+        image_paths = []
+        for ext in image_extensions:
+            pattern = os.path.join(test_dir, ext)
+            image_paths.extend(glob.glob(pattern))
+        
+        # 按檔名數字排序
+        def sort_key(path):
+            filename = os.path.basename(path)
+            # 提取數字部分進行排序
+            try:
+                number = int(filename.split('.')[0])
+                return number
+            except:
+                return 0
+        
+        image_paths.sort(key=sort_key)
+        
+        if not image_paths:
+            print("❌ 找不到任何圖片！")
+            return None
+        
+        print(f"🔍 找到 {len(image_paths)} 張圖片")
+        
+        # 準備結果列表
+        results = []
+        
+        # 批量預測（使用進度條）
+        print("🚀 開始批量預測...")
+        for image_path in tqdm(image_paths, desc="預測進度"):
+            filename = os.path.basename(image_path)
+            # 移除副檔名 (.jpg, .png 等)
+            id_name = os.path.splitext(filename)[0]
+            predicted_class = self.predict_single(image_path)
+            
+            results.append({
+                'id': id_name,
+                'character': predicted_class
+            })
+        
+        # 創建 DataFrame
+        df = pd.DataFrame(results)
+        
+        # 保存 CSV
+        df.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"💾 預測結果已保存至: {output_file}")
+        
+        # 顯示統計資訊
+        print(f"\n📊 預測統計:")
+        print(f"   總圖片數: {len(df)}")
+        print(f"   預測類別分布:")
+        for class_name, count in df['character'].value_counts().items():
+            print(f"     {class_name}: {count}")
+        
+        return df
+    
+    def get_model_info(self):
+        """獲取模型資訊"""
+        total_params = sum(p.numel() for p in self.model.parameters())
+        
+        info = {
+            'coca_model_name': self.coca_model_name,
+            'feature_dim': self.feature_dim,
+            'num_classes': len(self.idx_to_class),
+            'total_parameters': f"{total_params/1e6:.1f}M",
+            'device': str(self.device),
+            'class_names': list(self.class_to_idx.keys())
+        }
+        
+        return info
+
+class CoCaClassifier(nn.Module):
+    """
+    CoCa 分類器模型 (推理版本)
+    """
+    
+    def __init__(self, coca_model, classifier_head):
+        super(CoCaClassifier, self).__init__()
+        self.coca_model = coca_model
+        self.classifier_head = classifier_head
+        
+    def forward(self, x):
+        # 使用 CoCa 提取特徵
+        with torch.no_grad():  # 凍結特徵提取器
+            features = self.coca_model.encode_image(x)
+            
+        # 通過分類頭
+        output = self.classifier_head(features)
+        return output
+
+def main():
+    """主函數 - 命令列介面"""
+    parser = argparse.ArgumentParser(description="CoCa 模型推理工具")
+    parser.add_argument('--model', '-m', required=True, help='模型檔案路徑 (.pth)')
+    parser.add_argument('--test-dir', '-t', default='Dataset/test', help='測試圖片目錄')
+    parser.add_argument('--output', '-o', default='coca_predictions.csv', help='輸出 CSV 檔案名稱')
+    parser.add_argument('--device', choices=['auto', 'mps', 'cpu'], default='auto', help='計算設備')
+    
+    args = parser.parse_args()
+    
+    # 設定設備
+    if args.device == 'auto':
+        device = None
+    elif args.device == 'mps' and torch.backends.mps.is_available():
+        device = torch.device('mps')
+    else:
+        device = torch.device('cpu')
+    
+    # 初始化推理器
+    try:
+        inferencer = CoCaInference(args.model, device=device)
+        
+        # 顯示模型資訊
+        info = inferencer.get_model_info()
+        print(f"\n📊 模型資訊:")
+        print(f"   CoCa 模型: {info['coca_model_name']}")
+        print(f"   特徵維度: {info['feature_dim']}")
+        print(f"   類別數: {info['num_classes']}")
+        print(f"   參數量: {info['total_parameters']}")
+        print(f"   設備: {info['device']}")
+        
+    except Exception as e:
+        print(f"❌ 載入模型失敗: {e}")
+        return 1
+    
+    # 執行批量推理
+    try:
+        # 確保測試目錄存在
+        if not os.path.exists(args.test_dir):
+            print(f"❌ 測試目錄不存在: {args.test_dir}")
+            return 1
+        
+        # 開始預測
+        df = inferencer.predict_test_dataset(args.test_dir, args.output)
+        
+        if df is not None:
+            print(f"\n✅ 推理完成！")
+            print(f"📄 結果檔案: {args.output}")
+            print(f"🔢 總預測數: {len(df)}")
+        else:
+            print("❌ 推理失敗！")
+            return 1
+            
+    except Exception as e:
+        print(f"❌ 推理過程發生錯誤: {e}")
+        return 1
+    
+    return 0
+
+if __name__ == "__main__":
+    # 如果沒有命令列參數，使用互動模式
+    import sys
+    
+    if len(sys.argv) == 1:
+        print("🔮 CoCa 模型推理工具 - 互動模式")
+        print("=" * 50)
+        
+        # 尋找可用的模型
+        possible_patterns = [
+            "coca_*.pth",
+            "models/coca_*.pth",
+            "*.pth"
+        ]
+        
+        model_files = []
+        for pattern in possible_patterns:
+            model_files.extend(glob.glob(pattern))
+        
+        if not model_files:
+            print("❌ 找不到 CoCa 模型檔案")
+            model_path = input("請輸入模型檔案路徑: ").strip()
+        else:
+            print("🔍 找到以下模型檔案:")
+            coca_models = [f for f in model_files if 'coca' in f.lower()]
+            
+            if coca_models:
+                for i, model_file in enumerate(coca_models):
+                    print(f"{i+1}. {model_file}")
+                
+                choice = input(f"請選擇模型 (1-{len(coca_models)}): ").strip()
+                try:
+                    model_path = coca_models[int(choice)-1]
+                except (ValueError, IndexError):
+                    model_path = coca_models[0]
+                    print(f"使用預設模型: {model_path}")
+            else:
+                print("未找到 CoCa 模型，顯示所有 .pth 檔案:")
+                for i, model_file in enumerate(model_files[:5]):
+                    print(f"{i+1}. {model_file}")
+                
+                choice = input(f"請選擇模型 (1-{min(5, len(model_files))}): ").strip()
+                try:
+                    model_path = model_files[int(choice)-1]
+                except (ValueError, IndexError):
+                    model_path = model_files[0]
+        
+        # 設定測試目錄
+        test_dir = input("測試圖片目錄 (預設: Dataset/test): ").strip()
+        if not test_dir:
+            test_dir = "Dataset/test"
+        
+        # 設定輸出檔案
+        output_file = input("輸出檔案名稱 (預設: coca_predictions.csv): ").strip()
+        if not output_file:
+            output_file = "coca_predictions.csv"
+        
+        # 初始化推理器
+        try:
+            print("\n🚀 初始化 CoCa 推理器...")
+            inferencer = CoCaInference(model_path)
+            
+            # 顯示模型資訊
+            info = inferencer.get_model_info()
+            print(f"\n📊 模型資訊:")
+            print(f"   CoCa 模型: {info['coca_model_name']}")
+            print(f"   特徵維度: {info['feature_dim']}")
+            print(f"   類別數: {info['num_classes']}")
+            print(f"   參數量: {info['total_parameters']}")
+            print(f"   設備: {info['device']}")
+            
+        except Exception as e:
+            print(f"❌ 載入模型失敗: {e}")
+            exit(1)
+        
+        # 執行推理
+        try:
+            print(f"\n🎯 開始預測...")
+            df = inferencer.predict_test_dataset(test_dir, output_file)
+            
+            if df is not None:
+                print(f"\n🎉 推理完成！")
+                print(f"📄 結果已保存至: {output_file}")
+                
+                # 顯示前幾個結果
+                print(f"\n📋 前 10 個預測結果:")
+                print(df.head(10).to_string(index=False))
+                
+            else:
+                print("❌ 推理失敗！")
+                
+        except Exception as e:
+            print(f"❌ 推理過程發生錯誤: {e}")
+    else:
+        # 命令列模式
+        exit(main())
