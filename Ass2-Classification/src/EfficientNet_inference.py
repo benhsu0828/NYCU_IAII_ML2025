@@ -16,11 +16,13 @@ import timm
 import os
 import glob
 import numpy as np
+import pandas as pd
 from PIL import Image
 import matplotlib.pyplot as plt
 import json
 from pathlib import Path
 import argparse
+from tqdm import tqdm
 
 class EfficientNetInference:
     """
@@ -35,7 +37,20 @@ class EfficientNetInference:
             model_path: 模型檔案路徑 (.pth)
             device: 計算設備
         """
-        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # Windows 設備優先級：CUDA > CPU  
+        if device is None:
+            if torch.cuda.is_available():
+                self.device = torch.device("cuda")
+                # 顯示 GPU 資訊
+                gpu_name = torch.cuda.get_device_name(0)
+                gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+                print(f"🎮 偵測到 GPU: {gpu_name} ({gpu_memory:.1f} GB)")
+            else:
+                self.device = torch.device("cpu")
+                print("⚠️ 未偵測到 GPU，使用 CPU")
+        else:
+            self.device = device
+            
         self.model = None
         self.class_to_idx = {}
         self.idx_to_class = {}
@@ -91,7 +106,7 @@ class EfficientNetInference:
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
     
-    def predict_single(self, image_path, top_k=5):
+    def predict_single(self, image_path, top_k=1):
         """
         預測單張圖片
         
@@ -100,99 +115,196 @@ class EfficientNetInference:
             top_k: 返回前 k 個預測結果
             
         Returns:
-            dict: 預測結果
+            str 或 list: 預測的類別名稱
         """
-        if not os.path.exists(image_path):
-            raise FileNotFoundError(f"找不到圖片: {image_path}")
-        
-        # 載入並預處理圖片
         try:
+            # 載入並預處理圖片
             image = Image.open(image_path).convert('RGB')
-        except Exception as e:
-            raise ValueError(f"無法載入圖片 {image_path}: {e}")
-        
-        # 變換圖片
-        input_tensor = self.transform(image).unsqueeze(0).to(self.device)
-        
-        # 推理
-        with torch.no_grad():
-            outputs = self.model(input_tensor)
-            probabilities = torch.nn.functional.softmax(outputs, dim=1)
-        
-        # 獲取前 k 個結果
-        top_probs, top_indices = torch.topk(probabilities, k=min(top_k, len(self.idx_to_class)))
-        
-        # 整理結果
-        results = {
-            'image_path': image_path,
-            'predictions': []
-        }
-        
-        for i in range(len(top_indices[0])):
-            class_idx = top_indices[0][i].item()
-            prob = top_probs[0][i].item()
-            class_name = self.idx_to_class[class_idx]
             
-            results['predictions'].append({
-                'class_name': class_name,
-                'confidence': prob,
-                'class_idx': class_idx
-            })
-        
-        return results
+            # 變換圖片
+            input_tensor = self.transform(image).unsqueeze(0).to(self.device)
+            
+            # GPU 推理
+            with torch.no_grad():
+                if self.device.type == 'cuda':
+                    # GPU 記憶體優化
+                    torch.cuda.empty_cache()
+                
+                outputs = self.model(input_tensor)
+                probabilities = torch.nn.functional.softmax(outputs[0], dim=0)
+                
+                # 獲取 top-k 結果
+                top_prob, top_indices = torch.topk(probabilities, top_k)
+                
+                if top_k == 1:
+                    predicted_idx = top_indices[0].item()
+                    predicted_class = self.idx_to_class[predicted_idx]
+                    return predicted_class
+                else:
+                    results = []
+                    for i in range(top_k):
+                        idx = top_indices[i].item()
+                        prob = top_prob[i].item()
+                        class_name = self.idx_to_class[idx]
+                        results.append({
+                            'class': class_name,
+                            'confidence': prob
+                        })
+                    return results
+            
+        except Exception as e:
+            print(f"❌ 預測失敗 {image_path}: {e}")
+            return "unknown" if top_k == 1 else [{'class': 'unknown', 'confidence': 0.0}]
     
-    def predict_batch(self, image_folder, output_file=None, top_k=3):
+    def predict_batch(self, image_paths, batch_size=32):
         """
-        批量預測資料夾中的圖片
+        批次預測 - GPU 加速版本
         
         Args:
-            image_folder: 圖片資料夾路徑
-            output_file: 輸出結果檔案 (JSON)
-            top_k: 每張圖片返回前 k 個結果
+            image_paths: 圖片路徑列表
+            batch_size: 批次大小
             
         Returns:
-            list: 所有預測結果
+            list: 預測結果列表
         """
-        print(f"\n📁 批量推理: {image_folder}")
+        predictions = []
+        
+        # 計算總批次數
+        total_batches = (len(image_paths) + batch_size - 1) // batch_size
+        
+        # 添加進度條
+        with tqdm(total=len(image_paths), desc="GPU 批次推理進度", unit="張") as pbar:
+            for i in range(0, len(image_paths), batch_size):
+                batch_paths = image_paths[i:i+batch_size]
+                batch_images = []
+                valid_indices = []
+                
+                # 載入批次圖片
+                for idx, path in enumerate(batch_paths):
+                    try:
+                        image = Image.open(path).convert('RGB')
+                        tensor = self.transform(image)
+                        batch_images.append(tensor)
+                        valid_indices.append(idx)
+                    except Exception as e:
+                        print(f"❌ 載入失敗 {path}: {e}")
+                        predictions.append("unknown")
+                
+                if batch_images:
+                    # 批次推理
+                    try:
+                        batch_tensor = torch.stack(batch_images).to(self.device)
+                        
+                        with torch.no_grad():
+                            if self.device.type == 'cuda':
+                                torch.cuda.empty_cache()
+                            
+                            outputs = self.model(batch_tensor)
+                            _, predicted = torch.max(outputs.data, 1)
+                            
+                            # 轉換為類別名稱
+                            for j, pred_idx in enumerate(predicted.cpu().numpy()):
+                                if j < len(valid_indices):
+                                    predicted_class = self.idx_to_class[pred_idx]
+                                    # 插入正確位置
+                                    while len(predictions) <= i + valid_indices[j]:
+                                        predictions.append("unknown")
+                                    predictions[i + valid_indices[j]] = predicted_class
+                    
+                    except Exception as e:
+                        print(f"❌ 批次推理失敗: {e}")
+                        # 回退到單張推理
+                        for path in batch_paths:
+                            predictions.append(self.predict_single(path))
+                
+                # 更新進度條
+                pbar.update(len(batch_paths))
+        
+        return predictions
+    
+    def predict_test_dataset(self, test_dir="Dataset/test", output_file="predictions.csv", batch_size=32, use_gpu_batch=True):
+        """
+        對測試資料集進行批量預測並輸出 CSV - GPU 優化版本
+        
+        Args:
+            test_dir: 測試圖片目錄
+            output_file: 輸出 CSV 檔案名稱
+            batch_size: 批次大小 (GPU 時建議 32-64)
+            use_gpu_batch: 是否使用 GPU 批次推理
+            
+        Returns:
+            pd.DataFrame: 預測結果
+        """
+        print(f"\n📁 開始處理測試資料集: {test_dir}")
         
         # 支援的圖片格式
         image_extensions = ['*.jpg', '*.jpeg', '*.png', '*.bmp', '*.gif', '*.webp']
         
-        # 收集所有圖片
+        # 收集所有圖片路徑
         image_paths = []
         for ext in image_extensions:
-            image_paths.extend(glob.glob(os.path.join(image_folder, '**', ext), recursive=True))
+            pattern = os.path.join(test_dir, ext)
+            image_paths.extend(glob.glob(pattern))
+        
+        # 按檔名數字排序
+        def sort_key(path):
+            filename = os.path.basename(path)
+            # 提取數字部分進行排序
+            try:
+                number = int(filename.split('.')[0])
+                return number
+            except:
+                return 0
+        
+        image_paths.sort(key=sort_key)
         
         if not image_paths:
             print("❌ 找不到任何圖片！")
-            return []
+            return None
         
         print(f"🔍 找到 {len(image_paths)} 張圖片")
         
-        # 批量預測
-        all_results = []
+        # 根據設備選擇推理方式
+        if self.device.type == 'cuda' and use_gpu_batch:
+            print(f"🎮 使用 GPU 批次推理 (批次大小: {batch_size})")
+            predicted_classes = self.predict_batch(image_paths, batch_size)
+        else:
+            print(f"💻 使用逐張推理")
+            predicted_classes = []
+            for image_path in tqdm(image_paths, desc="逐張推理進度", unit="張"):
+                predicted_class = self.predict_single(image_path)
+                predicted_classes.append(predicted_class)
         
-        for i, image_path in enumerate(image_paths):
-            try:
-                result = self.predict_single(image_path, top_k=top_k)
-                all_results.append(result)
-                
-                # 顯示進度
-                if (i + 1) % 100 == 0 or (i + 1) == len(image_paths):
-                    print(f"⚡ 進度: {i+1}/{len(image_paths)} ({(i+1)/len(image_paths)*100:.1f}%)")
-                
-            except Exception as e:
-                print(f"❌ 預測失敗 {image_path}: {e}")
-                continue
+        # 準備結果
+        results = []
+        for image_path, predicted_class in zip(image_paths, predicted_classes):
+            filename = os.path.basename(image_path)
+            # 移除副檔名 (.jpg, .png 等)
+            id_name = os.path.splitext(filename)[0]
+            
+            results.append({
+                'id': id_name,
+                'character': predicted_class
+            })
         
-        # 保存結果
-        if output_file:
-            with open(output_file, 'w', encoding='utf-8') as f:
-                json.dump(all_results, f, indent=2, ensure_ascii=False)
-            print(f"💾 結果已保存: {output_file}")
+        # 創建 DataFrame
+        df = pd.DataFrame(results)
         
-        print(f"✅ 批量推理完成！成功預測 {len(all_results)} 張圖片")
-        return all_results
+        # 保存 CSV
+        df.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"💾 預測結果已保存至: {output_file}")
+        
+        # 顯示統計資訊
+        print(f"\n📊 預測統計:")
+        print(f"   總圖片數: {len(df)}")
+        print(f"   使用設備: {self.device}")
+        if self.device.type == 'cuda':
+            print(f"   GPU 記憶體使用: {torch.cuda.memory_allocated()/1024**3:.2f} GB")
+        print(f"   預測類別分布:")
+        for class_name, count in df['character'].value_counts().head(10).items():
+            print(f"     {class_name}: {count}")
+        
+        return df
     
     def predict_and_show(self, image_path, save_plot=True):
         """
@@ -287,7 +399,7 @@ def main():
     parser = argparse.ArgumentParser(description="EfficientNet 模型推理工具")
     parser.add_argument('--model', '-m', required=True, help='模型檔案路徑 (.pth)')
     parser.add_argument('--image', '-i', help='單張圖片路徑')
-    parser.add_argument('--folder', '-f', help='圖片資料夾路徑')
+    parser.add_argument('--folder', '-f',default='/mnt/e/NYCU/NYCU_IAII_ML2025/Ass2-Classification/Dataset/raw/test',help='圖片資料夾路徑(Default:/mnt/e/NYCU/NYCU_IAII_ML2025/Ass2-Classification/Dataset/raw/test)')
     parser.add_argument('--output', '-o', help='輸出結果檔案 (JSON)')
     parser.add_argument('--top-k', '-k', type=int, default=5, help='前 k 個預測結果')
     parser.add_argument('--show', action='store_true', help='顯示預測結果圖')
@@ -366,35 +478,55 @@ if __name__ == "__main__":
             print(f"❌ 載入模型失敗: {e}")
             exit(1)
         
-        # 選擇推理模式
-        print(f"\n🎯 選擇推理模式:")
-        print("1. 單張圖片預測")
-        print("2. 批量圖片預測")
+        import platform
+        is_wsl = "microsoft" in platform.uname().release.lower() or "WSL" in os.environ.get("WSL_DISTRO_NAME", "")
+
+        if is_wsl:
+            test_dir = input("測試圖片目錄 (預設: /mnt/e/NYCU/NYCU_IAII_ML2025/Ass2-Classification/Dataset/raw/test): ").strip()
+            if not test_dir:
+                test_dir = "/mnt/e/NYCU/NYCU_IAII_ML2025/Ass2-Classification/Dataset/raw/test"
+        else:  
+            # 設定測試目錄 - Windows 路徑
+            test_dir = input("測試圖片目錄 (預設: E:/NYCU/NYCU_IAII_ML2025/Ass2-Classification/Dataset/raw/test): ").strip()
+            if not test_dir:
+                test_dir = "E:/NYCU/NYCU_IAII_ML2025/Ass2-Classification/Dataset/raw/test"
+
+        # 設定批次大小 (GPU 優化)
+        batch_size_input = input("批次大小 (預設: 32, GPU 建議 32-64): ").strip()
+        try:
+            batch_size = int(batch_size_input) if batch_size_input else 32
+        except ValueError:
+            batch_size = 32
         
-        mode = input("請選擇 (1/2): ").strip()
-        
-        if mode == "1":
-            image_path = input("請輸入圖片路徑: ").strip()
-            show = input("顯示結果圖？(y/n): ").strip().lower() == 'y'
+        # 設定輸出檔案
+        model_name = model_files[int(choice)-1].split('_')[0]
+        output_file = input(f"輸出檔案名稱 (預設: {model_name}_predictions.csv): ").strip()
+        if not output_file:
+            output_file = f"{model_name}_predictions.csv"
+
+        # 執行推理
+        try:
+            print(f"\n🎯 開始預測...")
+            print(f"📊 批次大小: {batch_size}")
+            print(f"🎮 設備: {inferencer.device}")
             
-            try:
-                if show:
-                    inferencer.predict_and_show(image_path)
-                else:
-                    result = inferencer.predict_single(image_path)
-                    print(f"\n🎯 預測結果:")
-                    for i, pred in enumerate(result['predictions']):
-                        print(f"{i+1}. {pred['class_name']}: {pred['confidence']:.3f}")
-            except Exception as e:
-                print(f"❌ 預測失敗: {e}")
-        
-        elif mode == "2":
-            folder_path = input("請輸入圖片資料夾路徑: ").strip()
-            output_file = input("輸出檔案名稱 (預設 results.json): ").strip() or "results.json"
+            df = inferencer.predict_test_dataset(
+                test_dir, 
+                output_file, 
+                batch_size=batch_size,
+                use_gpu_batch=inferencer.device.type == 'cuda'
+            )
             
-            try:
-                inferencer.predict_batch(folder_path, output_file=output_file)
-            except Exception as e:
-                print(f"❌ 批量推理失敗: {e}")
-    else:
-        main()
+            if df is not None:
+                print(f"\n🎉 推理完成！")
+                print(f"📄 結果已保存至: {output_file}")
+                
+                # 顯示前幾個結果
+                print(f"\n📋 前 10 個預測結果:")
+                print(df.head(10).to_string(index=False))
+                
+            else:
+                print("❌ 推理失敗！")
+                
+        except Exception as e:
+            print(f"❌ 推理過程發生錯誤: {e}")

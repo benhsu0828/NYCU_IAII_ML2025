@@ -1,3 +1,5 @@
 **/Dataset/
+**/backgrounds/
 #不要上傳模型檔
 *.pth
+dtd-r1.0.1.tar.gz

@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-🔮 CoCa 模型推理工具 - Mac 版本
+🔮 CoCa 模型推理工具 - Windows GPU 版本
 
 功能：
 - 載入訓練好的 CoCa 分類器
 - 從 Dataset/test 目錄讀取測試圖片
 - 輸出 CSV 格式結果：id, character
-- 針對 Mac 系統優化
+- 針對 Windows GPU (CUDA) 優化
+- 支援批次推理加速
 """
 
+from platform import platform
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
@@ -44,12 +46,17 @@ class CoCaInference:
             model_path: 模型檔案路徑 (.pth)
             device: 計算設備
         """
-        # Mac 設備優先級：MPS > CPU
+        # Windows 設備優先級：CUDA > CPU
         if device is None:
-            if torch.backends.mps.is_available():
-                self.device = torch.device("mps")
+            if torch.cuda.is_available():
+                self.device = torch.device("cuda")
+                # 顯示 GPU 資訊
+                gpu_name = torch.cuda.get_device_name(0)
+                gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+                print(f"🎮 偵測到 GPU: {gpu_name} ({gpu_memory:.1f} GB)")
             else:
                 self.device = torch.device("cpu")
+                print("⚠️ 未偵測到 GPU，使用 CPU")
         else:
             self.device = device
             
@@ -148,8 +155,12 @@ class CoCaInference:
             # 變換圖片
             input_tensor = self.transform(image).unsqueeze(0).to(self.device)
             
-            # 推理
+            # GPU 推理
             with torch.no_grad():
+                if self.device.type == 'cuda':
+                    # GPU 記憶體優化
+                    torch.cuda.empty_cache()
+                
                 outputs = self.model(input_tensor)
                 _, predicted = torch.max(outputs.data, 1)
                 predicted_idx = predicted.item()
@@ -161,13 +172,73 @@ class CoCaInference:
             print(f"❌ 預測失敗 {image_path}: {e}")
             return "unknown"
     
-    def predict_test_dataset(self, test_dir="Dataset/test", output_file="predictions.csv"):
+    def predict_batch(self, image_paths, batch_size=32):
         """
-        對測試資料集進行批量預測並輸出 CSV
+        批次預測 - GPU 加速版本
+        
+        Args:
+            image_paths: 圖片路徑列表
+            batch_size: 批次大小
+            
+        Returns:
+            list: 預測結果列表
+        """
+        predictions = []
+        
+        for i in range(0, len(image_paths), batch_size):
+            batch_paths = image_paths[i:i+batch_size]
+            batch_images = []
+            valid_indices = []
+            
+            # 載入批次圖片
+            for idx, path in enumerate(batch_paths):
+                try:
+                    image = Image.open(path).convert('RGB')
+                    tensor = self.transform(image)
+                    batch_images.append(tensor)
+                    valid_indices.append(idx)
+                except Exception as e:
+                    print(f"❌ 載入失敗 {path}: {e}")
+                    predictions.append("unknown")
+            
+            if batch_images:
+                # 批次推理
+                try:
+                    batch_tensor = torch.stack(batch_images).to(self.device)
+                    
+                    with torch.no_grad():
+                        if self.device.type == 'cuda':
+                            torch.cuda.empty_cache()
+                        
+                        outputs = self.model(batch_tensor)
+                        _, predicted = torch.max(outputs.data, 1)
+                        
+                        # 轉換為類別名稱
+                        for j, pred_idx in enumerate(predicted.cpu().numpy()):
+                            if j < len(valid_indices):
+                                predicted_class = self.idx_to_class[pred_idx]
+                                # 插入正確位置
+                                while len(predictions) <= i + valid_indices[j]:
+                                    predictions.append("unknown")
+                                predictions[i + valid_indices[j]] = predicted_class
+                
+                except Exception as e:
+                    print(f"❌ 批次推理失敗: {e}")
+                    # 回退到單張推理
+                    for path in batch_paths:
+                        predictions.append(self.predict_single(path))
+        
+        return predictions
+    
+    def predict_test_dataset(self, test_dir="Dataset/test", output_file="predictions.csv", batch_size=32, use_gpu_batch=True):
+        """
+        對測試資料集進行批量預測並輸出 CSV - GPU 優化版本
         
         Args:
             test_dir: 測試圖片目錄
             output_file: 輸出 CSV 檔案名稱
+            batch_size: 批次大小 (GPU 時建議 32-64)
+            use_gpu_batch: 是否使用 GPU 批次推理
             
         Returns:
             pd.DataFrame: 預測結果
@@ -201,16 +272,23 @@ class CoCaInference:
         
         print(f"🔍 找到 {len(image_paths)} 張圖片")
         
-        # 準備結果列表
-        results = []
+        # 根據設備選擇推理方式
+        if self.device.type == 'cuda' and use_gpu_batch:
+            print(f"🎮 使用 GPU 批次推理 (批次大小: {batch_size})")
+            predicted_classes = self.predict_batch(image_paths, batch_size)
+        else:
+            print(f"� 使用逐張推理")
+            predicted_classes = []
+            for image_path in tqdm(image_paths, desc="GPU 預測進度"):
+                predicted_class = self.predict_single(image_path)
+                predicted_classes.append(predicted_class)
         
-        # 批量預測（使用進度條）
-        print("🚀 開始批量預測...")
-        for image_path in tqdm(image_paths, desc="預測進度"):
+        # 準備結果
+        results = []
+        for image_path, predicted_class in zip(image_paths, predicted_classes):
             filename = os.path.basename(image_path)
             # 移除副檔名 (.jpg, .png 等)
             id_name = os.path.splitext(filename)[0]
-            predicted_class = self.predict_single(image_path)
             
             results.append({
                 'id': id_name,
@@ -227,8 +305,11 @@ class CoCaInference:
         # 顯示統計資訊
         print(f"\n📊 預測統計:")
         print(f"   總圖片數: {len(df)}")
+        print(f"   使用設備: {self.device}")
+        if self.device.type == 'cuda':
+            print(f"   GPU 記憶體使用: {torch.cuda.memory_allocated()/1024**3:.2f} GB")
         print(f"   預測類別分布:")
-        for class_name, count in df['character'].value_counts().items():
+        for class_name, count in df['character'].value_counts().head(10).items():
             print(f"     {class_name}: {count}")
         
         return df
@@ -273,15 +354,17 @@ def main():
     parser.add_argument('--model', '-m', required=True, help='模型檔案路徑 (.pth)')
     parser.add_argument('--test-dir', '-t', default='Dataset/test', help='測試圖片目錄')
     parser.add_argument('--output', '-o', default='coca_predictions.csv', help='輸出 CSV 檔案名稱')
-    parser.add_argument('--device', choices=['auto', 'mps', 'cpu'], default='auto', help='計算設備')
+    parser.add_argument('--device', choices=['auto', 'cuda', 'cpu'], default='auto', help='計算設備')
+    parser.add_argument('--batch-size', '-b', type=int, default=32, help='批次大小 (GPU 模式)')
+    parser.add_argument('--no-gpu-batch', action='store_true', help='禁用 GPU 批次推理')
     
     args = parser.parse_args()
     
     # 設定設備
     if args.device == 'auto':
         device = None
-    elif args.device == 'mps' and torch.backends.mps.is_available():
-        device = torch.device('mps')
+    elif args.device == 'cuda' and torch.cuda.is_available():
+        device = torch.device('cuda')
     else:
         device = torch.device('cpu')
     
@@ -310,7 +393,12 @@ def main():
             return 1
         
         # 開始預測
-        df = inferencer.predict_test_dataset(args.test_dir, args.output)
+        df = inferencer.predict_test_dataset(
+            args.test_dir, 
+            args.output,
+            batch_size=args.batch_size,
+            use_gpu_batch=not args.no_gpu_batch
+        )
         
         if df is not None:
             print(f"\n✅ 推理完成！")
@@ -373,11 +461,26 @@ if __name__ == "__main__":
                 except (ValueError, IndexError):
                     model_path = model_files[0]
         
-        # 設定測試目錄
-        test_dir = input("測試圖片目錄 (預設: Dataset/test): ").strip()
-        if not test_dir:
-            test_dir = "Dataset/test"
+        import platform
+        is_wsl = "microsoft" in platform.uname().release.lower() or "WSL" in os.environ.get("WSL_DISTRO_NAME", "")
         
+        if is_wsl:
+            test_dir = input("測試圖片目錄 (預設: /mnt/e/NYCU/NYCU_IAII_ML2025/Ass2-Classification/Dataset/raw/test): ").strip()
+            if not test_dir:
+                test_dir = "/mnt/e/NYCU/NYCU_IAII_ML2025/Ass2-Classification/Dataset/raw/test"
+        else:  
+            # 設定測試目錄 - Windows 路徑
+            test_dir = input("測試圖片目錄 (預設: E:/NYCU/NYCU_IAII_ML2025/Ass2-Classification/Dataset/raw/test): ").strip()
+            if not test_dir:
+                test_dir = "E:/NYCU/NYCU_IAII_ML2025/Ass2-Classification/Dataset/raw/test"
+        
+        # 設定批次大小 (GPU 優化)
+        batch_size_input = input("批次大小 (預設: 32, GPU 建議 32-64): ").strip()
+        try:
+            batch_size = int(batch_size_input) if batch_size_input else 32
+        except ValueError:
+            batch_size = 32
+
         # 設定輸出檔案
         output_file = input("輸出檔案名稱 (預設: coca_predictions.csv): ").strip()
         if not output_file:
@@ -404,7 +507,15 @@ if __name__ == "__main__":
         # 執行推理
         try:
             print(f"\n🎯 開始預測...")
-            df = inferencer.predict_test_dataset(test_dir, output_file)
+            print(f"📊 批次大小: {batch_size}")
+            print(f"🎮 設備: {inferencer.device}")
+            
+            df = inferencer.predict_test_dataset(
+                test_dir, 
+                output_file, 
+                batch_size=batch_size,
+                use_gpu_batch=inferencer.device.type == 'cuda'
+            )
             
             if df is not None:
                 print(f"\n🎉 推理完成！")

@@ -29,6 +29,15 @@ from tqdm import tqdm
 import warnings
 warnings.filterwarnings('ignore')
 
+# TensorBoard 支援
+try:
+    from torch.utils.tensorboard import SummaryWriter
+    print("✅ TensorBoard 已安裝")
+except ImportError:
+    print("❌ 需要安裝 tensorboard:")
+    print("pip install tensorboard")
+    SummaryWriter = None
+
 # 安裝和導入 open_clip (包含 CoCa)
 try:
     import open_clip
@@ -68,7 +77,7 @@ class CoCaCharacterClassifier:
         print(f"🖥️ 設備: {self.device}")
         
         # 載入 CoCa 模型
-        self.coca_model, self.preprocess = self._load_coca_model()
+        self.coca_model, self.preprocess = self._load_coca_model(partial_unfreeze=True)
         
         # 創建分類頭
         self.classifier_head = self._create_classification_head()
@@ -83,8 +92,52 @@ class CoCaCharacterClassifier:
         
         print("✅ CoCa 分類器初始化完成")
     
-    def _load_coca_model(self):
-        """載入預訓練的 CoCa 模型"""
+    def load_checkpoint(self, checkpoint_path, load_for_training=True):
+        """
+        載入檢查點 (支援斷點續訓)
+        
+        Args:
+            checkpoint_path: 檢查點文件路徑
+            load_for_training: 是否載入訓練狀態 (優化器、調度器等)
+            
+        Returns:
+            dict: 包含載入信息的字典
+        """
+        print(f"📂 載入檢查點: {checkpoint_path}")
+        
+        if not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(f"檢查點文件不存在: {checkpoint_path}")
+        
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+            
+            # 載入模型狀態
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            
+            # 載入類別映射
+            self.class_to_idx = checkpoint['class_to_idx']
+            self.idx_to_class = checkpoint['idx_to_class']
+            
+            print("✅ 模型狀態載入成功")
+            print(f"📊 模型訓練到第 {checkpoint['epoch'] + 1} 輪")
+            print(f"🎯 最佳準確率: {checkpoint['accuracy']:.2f}%")
+            print(f"🏷️ 類別數: {len(self.class_to_idx)}")
+            
+            load_info = {
+                'epoch': checkpoint['epoch'],
+                'accuracy': checkpoint['accuracy'],
+                'history': checkpoint.get('history', {}),
+                'optimizer_state': checkpoint.get('optimizer_state_dict'),
+                'scheduler_state': checkpoint.get('scheduler_state_dict')
+            }
+            
+            return load_info
+            
+        except Exception as e:
+            raise RuntimeError(f"載入檢查點失敗: {e}")
+    
+    def _load_coca_model(self, partial_unfreeze=True):
+        """載入預訓練的 CoCa 模型 (支援部分解凍)"""
         print(f"🔄 載入 CoCa 模型: {self.coca_model_name}")
         
         try:
@@ -96,11 +149,34 @@ class CoCaCharacterClassifier:
             
             print("✅ CoCa 模型載入成功")
             
-            # 凍結 CoCa 參數
-            for param in model.parameters():
-                param.requires_grad = False
-            
-            print("❄️ CoCa 特徵提取器已凍結")
+            # 智能凍結策略
+            if partial_unfreeze:
+                # 先全部凍結
+                for param in model.parameters():
+                    param.requires_grad = False
+                
+                # 部分解凍最後幾層
+                unfrozen_layers = 0
+                for name, param in model.named_parameters():
+                    # 解凍視覺變換器的最後3層
+                    if any(layer in name for layer in [
+                        'visual.transformer.resblocks.11',
+                        'visual.transformer.resblocks.10', 
+                        'visual.transformer.resblocks.9',
+                        'visual.ln_post',  # 最後的 layer norm
+                        'visual.proj'      # 視覺投影層
+                    ]):
+                        param.requires_grad = True
+                        unfrozen_layers += 1
+                        print(f"🔓 解凍層: {name}")
+                
+                print(f"❄️ CoCa 部分凍結 ({unfrozen_layers} 層可訓練)")
+                
+            else:
+                # 完全凍結
+                for param in model.parameters():
+                    param.requires_grad = False
+                print("❄️ CoCa 特徵提取器完全凍結")
             
             # 獲取特徵維度
             dummy_input = torch.randn(1, 3, 224, 224)
@@ -248,10 +324,10 @@ class CoCaCharacterClassifier:
         return train_dataset, val_dataset
     
     def train(self, train_dataset, val_dataset=None, 
-              batch_size=32, epochs=50, lr=1e-3, 
-              patience=10, save_dir='models'):
+              batch_size=32, epochs=50, lr=3e-5, 
+              patience=10, save_dir='models', resume_from=None, use_tensorboard=True):
         """
-        訓練分類器
+        訓練分類器 (支援 TensorBoard + 斷點續訓)
         
         Args:
             train_dataset: 訓練資料集
@@ -261,6 +337,8 @@ class CoCaCharacterClassifier:
             lr: 學習率
             patience: 早停耐心值
             save_dir: 模型保存目錄
+            resume_from: 續訓檢查點路徑 (可選)
+            use_tensorboard: 是否使用 TensorBoard
         """
         print(f"\n🚀 開始訓練 CoCa 分類器")
         print(f"📊 訓練參數:")
@@ -269,12 +347,22 @@ class CoCaCharacterClassifier:
         print(f"   最大輪數: {epochs}")
         print(f"   早停耐心: {patience}")
         
+        # 設置 TensorBoard
+        writer = None
+        if use_tensorboard and SummaryWriter is not None:
+            log_dir = os.path.join('runs', f'coca_classifier_{datetime.now().strftime("%Y%m%d_%H%M%S")}')
+            writer = SummaryWriter(log_dir)
+            print(f"📈 TensorBoard 日誌: {log_dir}")
+            print(f"💡 啟動 TensorBoard: tensorboard --logdir=runs --port=6006")
+        elif use_tensorboard:
+            print("⚠️ TensorBoard 不可用，請安裝: pip install tensorboard")
+        
         # 創建資料載入器
         train_loader = DataLoader(
             train_dataset, 
             batch_size=batch_size, 
             shuffle=True,
-            num_workers=4,
+            num_workers=6,
             pin_memory=True
         )
         
@@ -284,21 +372,34 @@ class CoCaCharacterClassifier:
                 val_dataset,
                 batch_size=batch_size,
                 shuffle=False,
-                num_workers=4,
+                num_workers=6,
                 pin_memory=True
             )
         
-        # 設定優化器和損失函數
-        optimizer = optim.AdamW(
-            self.model.classifier_head.parameters(),  # 只訓練分類頭
-            lr=lr,
-            weight_decay=0.01
-        )
+        # 設定優化器 - 支援不同學習率
+        # 分離 CoCa 和分類頭參數
+        coca_params = [p for p in self.model.coca_model.parameters() if p.requires_grad]
+        classifier_params = list(self.model.classifier_head.parameters())
+        
+        if coca_params:
+            # 如果有 CoCa 參數可訓練，使用不同學習率
+            optimizer = optim.AdamW([
+                {'params': coca_params, 'lr': lr * 0.1, 'name': 'coca'},        # CoCa 用較小學習率
+                {'params': classifier_params, 'lr': lr, 'name': 'classifier'}   # 分類頭用正常學習率
+            ], weight_decay=0.01)
+            print(f"🎯 多層學習率: CoCa {lr * 0.1:.2e}, 分類頭 {lr:.2e}")
+        else:
+            # 只訓練分類頭
+            optimizer = optim.AdamW(classifier_params, lr=lr, weight_decay=0.01)
+            print(f"🎯 分類頭學習率: {lr:.2e}")
         
         criterion = nn.CrossEntropyLoss()
         scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
         
-        # 訓練記錄
+        # 初始化訓練狀態
+        start_epoch = 0
+        best_val_acc = 0.0
+        patience_counter = 0
         train_history = {
             'train_loss': [],
             'train_acc': [],
@@ -306,13 +407,37 @@ class CoCaCharacterClassifier:
             'val_acc': []
         }
         
-        best_val_acc = 0.0
-        patience_counter = 0
+        # 🔄 斷點續訓
+        if resume_from:
+            print(f"🔄 從檢查點續訓: {resume_from}")
+            load_info = self.load_checkpoint(resume_from, load_for_training=True)
+            
+            start_epoch = load_info['epoch'] + 1
+            best_val_acc = load_info['accuracy']
+            
+            # 載入訓練歷史
+            if 'history' in load_info and load_info['history']:
+                train_history = load_info['history']
+                print(f"📊 載入訓練歷史: {len(train_history['train_loss'])} 輪")
+            
+            # 載入優化器狀態
+            if load_info['optimizer_state']:
+                optimizer.load_state_dict(load_info['optimizer_state'])
+                print("✅ 優化器狀態載入成功")
+            
+            # 載入調度器狀態
+            if load_info['scheduler_state']:
+                scheduler.load_state_dict(load_info['scheduler_state'])
+                print("✅ 學習率調度器載入成功")
+            
+            print(f"🚀 從第 {start_epoch + 1} 輪開始繼續訓練")
+            print(f"🎯 當前最佳準確率: {best_val_acc:.2f}%")
+        
         start_time = time.time()
         
         print(f"\n📈 開始訓練...")
         
-        for epoch in range(epochs):
+        for epoch in range(start_epoch, epochs):
             epoch_start = time.time()
             
             # 訓練階段
@@ -363,6 +488,25 @@ class CoCaCharacterClassifier:
                 train_history['val_loss'].append(val_loss)
                 train_history['val_acc'].append(val_acc)
             
+            # 📈 TensorBoard 記錄
+            if writer is not None:
+                # 損失和準確率
+                writer.add_scalar('Loss/Train', avg_train_loss, epoch)
+                writer.add_scalar('Accuracy/Train', train_acc, epoch)
+                
+                if val_loader:
+                    writer.add_scalar('Loss/Validation', val_loss, epoch)
+                    writer.add_scalar('Accuracy/Validation', val_acc, epoch)
+                
+                # 學習率
+                current_lr = optimizer.param_groups[0]['lr']
+                writer.add_scalar('Learning_Rate', current_lr, epoch)
+                
+                # 如果有多個參數組，記錄所有學習率
+                if len(optimizer.param_groups) > 1:
+                    for i, group in enumerate(optimizer.param_groups):
+                        writer.add_scalar(f'Learning_Rate/{group.get("name", f"group_{i}")}', group['lr'], epoch)
+            
             # 更新學習率
             scheduler.step()
             
@@ -383,7 +527,7 @@ class CoCaCharacterClassifier:
                 patience_counter = 0
                 
                 # 保存最佳模型
-                self._save_model(save_dir, epoch, current_val_acc, train_history)
+                self._save_model(save_dir, epoch, current_val_acc, train_history, optimizer, scheduler)
                 print(f"  🎯 新的最佳模型! 驗證準確率: {best_val_acc:.2f}%")
                 
             else:
@@ -398,6 +542,18 @@ class CoCaCharacterClassifier:
         print(f"\n🎉 訓練完成!")
         print(f"⏱️ 總時間: {total_time:.1f}s")
         print(f"🎯 最佳驗證準確率: {best_val_acc:.2f}%")
+        
+        # 關閉 TensorBoard
+        if writer is not None:
+            # 記錄最終結果
+            writer.add_hparams(
+                {'lr': lr, 'batch_size': batch_size, 'epochs': epochs},
+                {'final_train_acc': train_history['train_acc'][-1] if train_history['train_acc'] else 0,
+                 'final_val_acc': train_history['val_acc'][-1] if train_history['val_acc'] else 0,
+                 'best_val_acc': best_val_acc}
+            )
+            writer.close()
+            print(f"📈 TensorBoard 日誌已關閉")
         
         # 繪製訓練曲線
         self._plot_training_history(train_history, save_dir)
@@ -428,44 +584,41 @@ class CoCaCharacterClassifier:
         
         return avg_val_loss, val_acc
     
-    def _save_model(self, save_dir, epoch, accuracy, history):
-        """保存模型"""
+    def _save_model(self, save_dir, epoch, accuracy, history, optimizer=None, scheduler=None):
+        """保存模型 (支援斷點續訓)"""
         os.makedirs(save_dir, exist_ok=True)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M")
         model_name = f"coca_classifier_epoch_{epoch+1:03d}_acc_{accuracy:.2f}_{timestamp}.pth"
         model_path = os.path.join(save_dir, model_name)
         
-        # 保存完整的模型狀態
-        torch.save({
+        # 保存完整的模型狀態 (包含訓練狀態)
+        checkpoint = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': None,  # 可選
             'accuracy': accuracy,
+            'best_accuracy': accuracy,
             'num_classes': self.num_classes,
             'class_to_idx': self.class_to_idx,
             'idx_to_class': self.idx_to_class,
             'coca_model_name': self.coca_model_name,
             'feature_dim': self.feature_dim,
             'history': history
-        }, model_path)
+        }
+        
+        # 保存優化器和調度器狀態 (用於斷點續訓)
+        if optimizer is not None:
+            checkpoint['optimizer_state_dict'] = optimizer.state_dict()
+        if scheduler is not None:
+            checkpoint['scheduler_state_dict'] = scheduler.state_dict()
+        
+        torch.save(checkpoint, model_path)
         
         print(f"💾 模型已保存: {model_path}")
         
         # 也保存一個 "latest" 版本
         latest_path = os.path.join(save_dir, "coca_classifier_latest.pth")
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': None,
-            'accuracy': accuracy,
-            'num_classes': self.num_classes,
-            'class_to_idx': self.class_to_idx,
-            'idx_to_class': self.idx_to_class,
-            'coca_model_name': self.coca_model_name,
-            'feature_dim': self.feature_dim,
-            'history': history
-        }, latest_path)
+        torch.save(checkpoint, latest_path)
     
     def _plot_training_history(self, history, save_dir):
         """繪製訓練歷史"""
@@ -501,6 +654,82 @@ class CoCaCharacterClassifier:
         plt.show()
         
         print(f"📊 訓練曲線已保存: {plot_path}")
+    
+    def resume_training(self, checkpoint_path, train_dataset, val_dataset=None,
+                       additional_epochs=20, new_lr=None, **kwargs):
+        """
+        便捷的斷點續訓函數
+        
+        Args:
+            checkpoint_path: 檢查點路徑
+            train_dataset: 訓練資料集
+            val_dataset: 驗證資料集
+            additional_epochs: 額外訓練輪數
+            new_lr: 新學習率 (可選，用於微調)
+            **kwargs: 其他訓練參數
+        """
+        print(f"🔄 CoCa 分類器斷點續訓")
+        print(f"📂 檢查點: {checkpoint_path}")
+        print(f"➕ 額外訓練: {additional_epochs} 輪")
+        
+        # 載入檢查點信息
+        load_info = self.load_checkpoint(checkpoint_path, load_for_training=False)
+        current_epoch = load_info['epoch'] + 1
+        target_epochs = current_epoch + additional_epochs
+        
+        print(f"🎯 目標輪數: {current_epoch} → {target_epochs}")
+        
+        # 設定學習率
+        lr = new_lr if new_lr else 1e-4  # 默認使用較小的學習率
+        if new_lr:
+            print(f"📉 使用新學習率: {lr}")
+        
+        # 開始續訓
+        return self.train(
+            train_dataset=train_dataset,
+            val_dataset=val_dataset,
+            epochs=target_epochs,
+            lr=lr,
+            resume_from=checkpoint_path,
+            **kwargs
+        )
+    
+    @staticmethod
+    def find_checkpoints(model_dir='models'):
+        """尋找可用的檢查點"""
+        print(f"🔍 搜尋檢查點: {model_dir}")
+        
+        if not os.path.exists(model_dir):
+            print("❌ 模型目錄不存在")
+            return []
+        
+        checkpoints = []
+        for file in os.listdir(model_dir):
+            if file.endswith('.pth') and 'coca' in file:
+                file_path = os.path.join(model_dir, file)
+                try:
+                    # 嘗試載入檢查點信息
+                    checkpoint = torch.load(file_path, map_location='cpu')
+                    info = {
+                        'path': file_path,
+                        'filename': file,
+                        'epoch': checkpoint.get('epoch', 0),
+                        'accuracy': checkpoint.get('accuracy', 0),
+                        'timestamp': os.path.getmtime(file_path)
+                    }
+                    checkpoints.append(info)
+                except:
+                    continue
+        
+        # 按準確率排序
+        checkpoints.sort(key=lambda x: x['accuracy'], reverse=True)
+        
+        print(f"📊 找到 {len(checkpoints)} 個檢查點:")
+        for i, cp in enumerate(checkpoints[:5]):  # 只顯示前5個
+            timestamp = datetime.fromtimestamp(cp['timestamp']).strftime('%m/%d %H:%M')
+            print(f"  {i+1}. {cp['filename']} (第{cp['epoch']+1}輪, 準確率:{cp['accuracy']:.2f}%) [{timestamp}]")
+        
+        return checkpoints
 
 class CoCaClassifier(nn.Module):
     """
@@ -523,23 +752,62 @@ class CoCaClassifier(nn.Module):
         return output
 
 def main():
-    """主函數"""
+    """主函數 (支援續訓)"""
     print("🔮 CoCa 辛普森角色分類器")
     print("=" * 50)
     
     # 設定參數
     NUM_CLASSES = 50  # 辛普森角色數量
-    BATCH_SIZE = 16   # CoCa 模型較大，使用較小的批次
-    EPOCHS = 30
-    LEARNING_RATE = 1e-3
+    BATCH_SIZE = 32
+    EPOCHS = 50
+    LEARNING_RATE = 3e-3
     
     # 資料路徑 (根據您的實際路徑調整)
-    data_paths = {
-        'train': '/Users/nimab/Desktop/陽交大/NYCU_IAII_ML2025/Ass2-Classification/Dataset/train',
-        'val': '/Users/nimab/Desktop/陽交大/NYCU_IAII_ML2025/Ass2-Classification/Dataset/val'
-    }
-    
+    # 檢測環境
+    import platform
+    is_wsl = "microsoft" in platform.uname().release.lower() or "WSL" in os.environ.get("WSL_DISTRO_NAME", "")
+    Data_path = {}
+
+    if is_wsl:
+        base_path = "/mnt/e/NYCU/NYCU_IAII_ML2025/Ass2-Classification/Dataset"
+        Data_path["train"] = f"{base_path}/augmented/train"
+        Data_path["val"] = f"{base_path}/preprocessed/val"
+    else:
+        base_path = "E:/NYCU/NYCU_IAII_ML2025/Ass2-Classification/Dataset"
+        Data_path["train"] = f"{base_path}/augmented/train"
+        Data_path["val"] = f"{base_path}/preprocessed/val"
+
     try:
+        # 訓練模式選擇
+        print("\n🔄 訓練模式選擇:")
+        print("1. 從頭開始訓練 (預設)")
+        print("2. 從檢查點繼續訓練")
+        
+        mode = input("請選擇 (1/2): ").strip()
+        
+        if mode == "2":
+            # 尋找可用檢查點
+            checkpoints = CoCaCharacterClassifier.find_checkpoints('models')
+            
+            if not checkpoints:
+                print("❌ 沒有找到可用的檢查點，將從頭開始訓練")
+                resume_from = None
+            else:
+                print(f"\n請選擇檢查點 (1-{len(checkpoints)}): ", end="")
+                try:
+                    choice = int(input()) - 1
+                    if 0 <= choice < len(checkpoints):
+                        resume_from = checkpoints[choice]['path']
+                        print(f"✅ 選擇檢查點: {checkpoints[choice]['filename']}")
+                    else:
+                        print("❌ 無效選擇，從頭開始訓練")
+                        resume_from = None
+                except:
+                    print("❌ 輸入錯誤，從頭開始訓練")
+                    resume_from = None
+        else:
+            resume_from = None
+        
         # 初始化分類器
         print("🚀 初始化 CoCa 分類器...")
         classifier = CoCaCharacterClassifier(
@@ -549,19 +817,33 @@ def main():
         
         # 準備資料
         print("📊 準備資料...")
-        train_dataset, val_dataset = classifier.prepare_data(data_paths)
+        train_dataset, val_dataset = classifier.prepare_data(Data_path)
         
         # 開始訓練
-        print("🎯 開始訓練...")
-        history = classifier.train(
-            train_dataset=train_dataset,
-            val_dataset=val_dataset,
-            batch_size=BATCH_SIZE,
-            epochs=EPOCHS,
-            lr=LEARNING_RATE,
-            patience=10,
-            save_dir='models'
-        )
+        if resume_from:
+            print("🔄 續訓模式...")
+            # 如果是續訓，使用較小的學習率和較少輪數
+            history = classifier.train(
+                train_dataset=train_dataset,
+                val_dataset=val_dataset,
+                batch_size=BATCH_SIZE,
+                epochs=EPOCHS,
+                lr=LEARNING_RATE / 2,  # 較小的學習率
+                patience=8,
+                save_dir='models',
+                resume_from=resume_from
+            )
+        else:
+            print("🎯 全新訓練...")
+            history = classifier.train(
+                train_dataset=train_dataset,
+                val_dataset=val_dataset,
+                batch_size=BATCH_SIZE,
+                epochs=EPOCHS,
+                lr=LEARNING_RATE,
+                patience=10,
+                save_dir='models'
+            )
         
         print("\n🎉 CoCa 分類器訓練完成!")
         

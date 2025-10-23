@@ -26,6 +26,16 @@ from tqdm import tqdm
 import time
 import json
 import platform
+from datetime import datetime
+
+# TensorBoard 支援
+try:
+    from torch.utils.tensorboard import SummaryWriter
+    print("✅ TensorBoard 已安裝")
+except ImportError:
+    print("❌ 需要安裝 tensorboard:")
+    print("pip install tensorboard")
+    SummaryWriter = None
 
 class EfficientNetCharacterClassifier:
     """
@@ -150,10 +160,6 @@ class EfficientNetCharacterClassifier:
             # 訓練時的資料增強
             return transforms.Compose([
                 transforms.Resize((224, 224)),
-                transforms.RandomHorizontalFlip(p=0.5),
-                transforms.RandomRotation(degrees=15),
-                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-                transforms.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
             ])
@@ -293,15 +299,16 @@ class EfficientNetCharacterClassifier:
         return best_batch_size
     
     def train(self, train_dataset, val_dataset=None, 
-              batch_size=None, epochs=30, lr=3e-5, 
-              auto_batch_size=True, patience=10, resume_from=None):
+              batch_size=32, epochs=30, lr=3e-5, 
+              auto_batch_size=False, patience=10, resume_from=None, use_tensorboard=True):
         """
-        訓練模型 (支援斷點續訓)
+        訓練模型 (支援 TensorBoard + 斷點續訓)
         
         Args:
             train_dataset: 訓練資料集
             val_dataset: 驗證資料集
             batch_size: batch size (None 表示自動檢測)
+            use_tensorboard: 是否使用 TensorBoard
             epochs: 訓練輪數
             lr: 學習率
             auto_batch_size: 是否自動檢測 batch size
@@ -330,7 +337,7 @@ class EfficientNetCharacterClassifier:
             train_dataset,
             batch_size=batch_size,
             shuffle=True,
-            num_workers=4,
+            num_workers=6,
             pin_memory=True if torch.cuda.is_available() else False,
             drop_last=True
         )
@@ -341,7 +348,7 @@ class EfficientNetCharacterClassifier:
                 val_dataset,
                 batch_size=batch_size,
                 shuffle=False,
-                num_workers=2,
+                num_workers=6,
                 pin_memory=True if torch.cuda.is_available() else False
             )
         
@@ -376,6 +383,16 @@ class EfficientNetCharacterClassifier:
         criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
         print(f"🎯 使用Label Smoothing: {label_smoothing}")
         
+        # 設置 TensorBoard
+        writer = None
+        if use_tensorboard and SummaryWriter is not None:
+            log_dir = os.path.join('runs', f'efficientnet_{self.model_name}_{datetime.now().strftime("%Y%m%d_%H%M%S")}')
+            writer = SummaryWriter(log_dir)
+            print(f"📈 TensorBoard 日誌: {log_dir}")
+            print(f"💡 啟動 TensorBoard: tensorboard --logdir=runs --port=6006")
+        elif use_tensorboard:
+            print("⚠️ TensorBoard 不可用，請安裝: pip install tensorboard")
+
         # 訓練歷史 (支援斷點續訓)
         if resume_info and 'history' in resume_info:
             history = resume_info['history']
@@ -422,6 +439,24 @@ class EfficientNetCharacterClassifier:
             history['val_acc'].append(val_acc)
             history['lr'].append(current_lr)
             
+            # 📈 TensorBoard 記錄
+            if writer is not None:
+                # 損失和準確率
+                writer.add_scalar('Loss/Train', train_loss, epoch)
+                writer.add_scalar('Accuracy/Train', train_acc, epoch)
+                
+                if val_loader:
+                    writer.add_scalar('Loss/Validation', val_loss, epoch)
+                    writer.add_scalar('Accuracy/Validation', val_acc, epoch)
+                
+                # 學習率
+                writer.add_scalar('Learning_Rate', current_lr, epoch)
+                
+                # 如果是 EfficientNet，記錄模型特定信息
+                writer.add_scalar('Model_Info/Batch_Size', batch_size, epoch)
+                if hasattr(self, 'anti_overfitting_mode'):
+                    writer.add_scalar('Model_Info/Anti_Overfitting', int(self.anti_overfitting_mode), epoch)
+            
             # 計算時間
             epoch_time = time.time() - start_time
             
@@ -434,7 +469,7 @@ class EfficientNetCharacterClassifier:
             
             # 定期保存檢查點 (每5個epoch保存一次)
             if (epoch + 1) % 5 == 0:
-                checkpoint_filename = f"{self.model_name}_checkpoint_epoch_{epoch+1:03d}_acc_{val_acc:.2f}.pth"
+                checkpoint_filename = f"models/{self.model_name}_checkpoint_epoch_{epoch+1:03d}_acc_{val_acc:.2f}.pth"
                 self.save_model(
                     checkpoint_filename,
                     epoch=epoch,
@@ -481,6 +516,26 @@ class EfficientNetCharacterClassifier:
             best_epoch = max(range(len(history['val_acc'])), key=lambda i: history['val_acc'][i]) + start_epoch + 1
             best_filename = f"{self.model_name}_epoch_{best_epoch:03d}_acc_{best_val_acc:.2f}.pth"
             print(f"📁 最佳模型已保存為: {best_filename}")
+
+        # 關閉 TensorBoard
+        if writer is not None:
+            # 記錄最終超參數和結果
+            writer.add_hparams(
+                {
+                    'lr': lr,
+                    'batch_size': batch_size,
+                    'epochs': epochs,
+                    'model': self.model_name,
+                    'patience': patience
+                },
+                {
+                    'final_train_acc': history['train_acc'][-1] if history['train_acc'] else 0,
+                    'final_val_acc': history['val_acc'][-1] if history['val_acc'] else 0,
+                    'best_val_acc': best_val_acc
+                }
+            )
+            writer.close()
+            print(f"📈 TensorBoard 日誌已關閉")
         
         return history
     
@@ -596,10 +651,45 @@ class EfficientNetCharacterClassifier:
             raise FileNotFoundError(f"找不到模型檔案: {filename}")
         
         print(f"📂 載入模型: {filename}")
-        checkpoint = torch.load(filename, map_location=self.device)
+        checkpoint = torch.load(filename, map_location=self.device, weights_only=False)
+        
+        # 檢查模型架構是否匹配
+        saved_model_name = checkpoint.get('model_name', 'unknown')
+        current_model_name = self.model_name
+        
+        # 檢查模型架構相容性
+        def get_model_family(model_name):
+            if 'efficientnet' in model_name:
+                return 'efficientnet'
+            elif 'convnext' in model_name:
+                return 'convnext'
+            else:
+                return 'other'
+        
+        saved_family = get_model_family(saved_model_name)
+        current_family = get_model_family(current_model_name)
+        
+        if saved_family != current_family:
+            print(f"❌ 模型架構不匹配!")
+            print(f"   檢查點模型: {saved_model_name} ({saved_family})")
+            print(f"   當前模型: {current_model_name} ({current_family})")
+            print(f"💡 建議:")
+            print(f"   - 選擇相同架構的模型 ({saved_family})")
+            print(f"   - 或者從頭開始訓練當前模型")
+            raise RuntimeError(f"模型架構不匹配: {saved_model_name} vs {current_model_name}")
         
         # 載入模型權重
-        self.model.load_state_dict(checkpoint['model_state_dict'])
+        try:
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            print(f"✅ 成功載入 {saved_model_name} 權重")
+        except RuntimeError as e:
+            print(f"❌ 載入權重失敗: {e}")
+            print(f"💡 這可能是因為:")
+            print(f"   - 模型版本不同")
+            print(f"   - 類別數不匹配") 
+            print(f"   - 模型配置不同")
+            raise
+        
         self.class_to_idx = checkpoint['class_to_idx']
         self.idx_to_class = checkpoint['idx_to_class']
         
@@ -779,7 +869,8 @@ def main():
     
     # 如果選擇了V2版本或ConvNeXt，自動啟用抗過擬合模式
     auto_anti_overfitting_models = ['efficientnetv2', 'convnext']
-    anti_overfitting = any(model_type in model_name for model_type in auto_anti_overfitting_models)
+    # anti_overfitting = any(model_type in model_name for model_type in auto_anti_overfitting_models)
+    anti_overfitting = False
     
     if anti_overfitting:
         if 'efficientnetv2' in model_name:
@@ -816,14 +907,15 @@ def main():
     resume_from = None
     
     if train_mode == "2":
-        # 尋找可用的模型檔案 (新舊格式都支援)
+        # 尋找可用的模型檔案 (所有架構，新舊格式都支援)
         model_files = []
         
-        # 搜尋新格式檔案 (efficientnet_b3_epoch_XXX_acc_XX.XX.pth)
+        # 搜尋所有模型檔案 (.pth)
         for f in os.listdir('.'):
-            if (f.startswith('efficientnet_') and '_epoch_' in f and '_acc_' in f and f.endswith('.pth')) or \
-               (f.startswith('best_efficientnet_') and f.endswith('.pth')):
-                model_files.append(f)
+            if f.endswith('.pth'):
+                # 檢查是否是訓練模型檔案 (包含 epoch 和 acc 或 best_ 前綴)
+                if ('_epoch_' in f and '_acc_' in f) or f.startswith('best_'):
+                    model_files.append(f)
         
         # 按檔案修改時間排序 (最新的在前面)
         model_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
@@ -831,23 +923,36 @@ def main():
         if model_files:
             print("\n📁 找到以下模型檔案:")
             for i, file in enumerate(model_files, 1):
-                # 解析檔案資訊
+                # 解析檔案資訊和架構
                 file_info = ""
+                model_arch = "unknown"
+                
                 try:
+                    # 先識別模型架構
+                    if 'efficientnet' in file:
+                        model_arch = "EfficientNet"
+                    elif 'convnext' in file:
+                        model_arch = "ConvNeXt"
+                    elif 'coca' in file:
+                        model_arch = "CoCa"
+                    
+                    # 解析訓練資訊
                     if '_epoch_' in file and '_acc_' in file:
-                        # 新格式: efficientnet_b3_epoch_015_acc_98.50.pth
+                        # 新格式: model_name_epoch_015_acc_98.50.pth
                         parts = file.replace('.pth', '').split('_')
                         epoch_idx = parts.index('epoch') + 1
                         acc_idx = parts.index('acc') + 1
                         epoch_num = parts[epoch_idx]
                         accuracy = parts[acc_idx]
-                        file_info = f" (第{epoch_num}輪, 準確率:{accuracy}%)"
+                        file_info = f" ({model_arch}, 第{epoch_num}輪, 準確率:{accuracy}%)"
                     elif 'best_' in file and 'acc' in file:
-                        # 舊格式: best_efficientnet_b3_acc98.0.pth
+                        # 舊格式: best_model_name_acc98.0.pth
                         acc_part = file.split('acc')[1].replace('.pth', '')
-                        file_info = f" (準確率:{acc_part}%)"
+                        file_info = f" ({model_arch}, 準確率:{acc_part}%)"
+                    else:
+                        file_info = f" ({model_arch})"
                 except:
-                    pass
+                    file_info = f" ({model_arch})"
                 
                 # 顯示檔案修改時間
                 import time
@@ -867,7 +972,7 @@ def main():
     
     # 訓練參數
     epochs = int(input("總訓練輪數 (預設 30): ") or "30")
-    lr = float(input("學習率 (預設 3e-5): ") or "3e-5")
+    lr = float(input("學習率 (預設 2e-4): ") or "2e-4")
     
     # 開始訓練 (支援斷點續訓)
     history = classifier.train(
@@ -875,7 +980,7 @@ def main():
         val_dataset=val_dataset,
         epochs=epochs,
         lr=lr,
-        auto_batch_size=True,
+        auto_batch_size=False,
         patience=10,
         resume_from=resume_from
     )
