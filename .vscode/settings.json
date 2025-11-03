@@ -1,5 +1,6 @@
 {
     "files.associations": {
         "system_error": "cpp"
-    }
+    },
+    "git.ignoreLimitWarning": true
 }
