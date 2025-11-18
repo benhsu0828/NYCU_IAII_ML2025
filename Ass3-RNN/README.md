@@ -11,6 +11,8 @@
 - 格式轉換為 16-bit PCM
 - 資料夾結構與統計資訊
 
+接著運行NYCU_IAII_ML2025_RNN.ipynb就可以訓練並測試出結果，然後可以指定不同版本的whisper來訓練
+
 # Whisper-Taiwanese model V0.5 (Tv0.5)
 - 第一版:
     ```
@@ -161,3 +163,4 @@
     )
     ```
     資料使用老師的+RawBoost3和6，總共資料量為4倍
+    MDL = 7.34343
