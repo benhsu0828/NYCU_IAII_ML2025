@@ -1,17 +1,22 @@
-# Ass3 - RNN
-# 台語語音辨識
+# Ass3 - RNN 台語語音辨識
 
-首先先使用downloadData.py從以下三個資料集下載資料增強用的資料
+## 首先先使用downloadData.py從以下三個資料集下載資料增強用的資料
 - MS-SNSD: 微軟背景噪音資料集（~900 個檔案）
 - ESC-50: 環境聲音分類資料集（100 個短暫噪音）
 - OpenSLR RIR: 房間脈衝響應資料集（50 個 RIR 檔案）
 
-並且進行預處理:
+將kaggle的資料解壓縮到相同目錄下的data資料夾，形成:
+- ./data/train/train/train/*.wav
+- ./data/test-random/test-random/*.wav
+
+## 並且進行預處理:
 - 採樣率統一到 22050 Hz
 - 格式轉換為 16-bit PCM
 - 資料夾結構與統計資訊
 
-接著運行NYCU_IAII_ML2025_RNN.ipynb就可以訓練並測試出結果，然後可以指定不同版本的whisper來訓練
+## 接著執行data_augmentation_rawboost.py，使用RawBoost進行資料增強(相關描述可以參考[RawBoost 使用指南](./RAWBOOST_USAGE_GUIDE.md))
+
+## 最後運行NYCU_IAII_ML2025_RNN.ipynb就可以訓練並測試出結果，然後可以指定不同版本的whisper來訓練
 
 # Whisper-Taiwanese model V0.5 (Tv0.5)
 - 第一版:
