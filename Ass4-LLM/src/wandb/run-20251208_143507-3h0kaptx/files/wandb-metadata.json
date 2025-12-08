@@ -1,0 +1,17 @@
+{
+  "os":  "Windows-10-10.0.26200-SP0",
+  "python":  "CPython 3.11.14",
+  "startedAt":  "2025-12-08T06:35:07.701685Z",
+  "args":  [
+    "--run_sft",
+    "--run_inf"
+  ],
+  "program":  "C:\\Users\\bente\\OneDrive\\桌面\\NYCU_IAII_ML2025\\Ass4-LLM\\src\\main_CPT_SFT.py",
+  "codePath":  "main_CPT_SFT.py",
+  "codePathLocal":  "main_CPT_SFT.py",
+  "email":  "benten.hsu@gmail.com",
+  "root":  "C:\\Users\\bente\\OneDrive\\桌面\\NYCU_IAII_ML2025\\Ass4-LLM\\src",
+  "host":  "ben",
+  "executable":  "C:\\Users\\bente\\miniconda3\\envs\\Ass4\\python.exe",
+  "writerId":  "afhoc3j8ncnrsi33b0yy3ig2ra7cufva"
+}

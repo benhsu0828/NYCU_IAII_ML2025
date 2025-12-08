@@ -1,0 +1,91 @@
+_wandb:
+    value:
+        cli_version: 0.23.1
+        e:
+            putqbttdwjaqioymwcjxdl3hpe777td1:
+                args:
+                    - --run_sft
+                    - --run_inf
+                codePath: Ass4-LLM\src\main_CPT_SFT.py
+                codePathLocal: main_CPT_SFT.py
+                cpu_count: 8
+                cpu_count_logical: 16
+                cudaVersion: "13.0"
+                disk:
+                    /:
+                        total: "511032946688"
+                        used: "202582335488"
+                email: benten.hsu@gmail.com
+                executable: C:\Users\bente\miniconda3\envs\Ass4\python.exe
+                git:
+                    commit: 1dc85c647d461a605d46f677f63f83f5a390f5ab
+                    remote: https://github.com/benhsu0828/NYCU_IAII_ML2025.git
+                gpu: NVIDIA GeForce RTX 5050
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Blackwell
+                      cudaCores: 2560
+                      memoryTotal: "8546942976"
+                      name: NVIDIA GeForce RTX 5050
+                      uuid: GPU-b1c0431a-cc1f-6517-7e5a-48d0573e4eff
+                host: ben
+                memory:
+                    total: "16340992000"
+                os: Windows-10-10.0.26200-SP0
+                program: C:\Users\bente\OneDrive\桌面\NYCU_IAII_ML2025\Ass4-LLM\src\main_CPT_SFT.py
+                python: CPython 3.11.14
+                root: C:\Users\bente\OneDrive\桌面\NYCU_IAII_ML2025\Ass4-LLM\src
+                startedAt: "2025-12-08T14:14:54.532723Z"
+                writerId: putqbttdwjaqioymwcjxdl3hpe777td1
+        m: []
+        python_version: 3.11.14
+        t:
+            "1":
+                - 1
+                - 11
+                - 41
+                - 49
+                - 51
+                - 71
+                - 84
+                - 98
+            "2":
+                - 1
+                - 11
+                - 41
+                - 49
+                - 51
+                - 71
+                - 84
+                - 98
+            "3":
+                - 13
+                - 15
+                - 16
+            "4": 3.11.14
+            "5": 0.23.1
+            "6": 4.57.2
+            "8":
+                - 3
+            "12": 0.23.1
+            "13": windows-amd64
+base_model:
+    value: ./model/cpt_model
+batch_size:
+    value: 1
+gradient_accumulation:
+    value: 16
+learning_rate:
+    value: 1e-05
+lora_alpha:
+    value: 32
+lora_r:
+    value: 16
+max_seq_length:
+    value: 1024
+max_steps:
+    value: 100
+stage:
+    value: SFT
+vram:
+    value: 8GB

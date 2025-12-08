@@ -1,0 +1,71 @@
+_wandb:
+    value:
+        cli_version: 0.23.1
+        e:
+            afhoc3j8ncnrsi33b0yy3ig2ra7cufva:
+                args:
+                    - --run_sft
+                    - --run_inf
+                codePath: main_CPT_SFT.py
+                codePathLocal: main_CPT_SFT.py
+                email: benten.hsu@gmail.com
+                executable: C:\Users\bente\miniconda3\envs\Ass4\python.exe
+                host: ben
+                os: Windows-10-10.0.26200-SP0
+                program: C:\Users\bente\OneDrive\桌面\NYCU_IAII_ML2025\Ass4-LLM\src\main_CPT_SFT.py
+                python: CPython 3.11.14
+                root: C:\Users\bente\OneDrive\桌面\NYCU_IAII_ML2025\Ass4-LLM\src
+                startedAt: "2025-12-08T06:35:07.701685Z"
+                writerId: afhoc3j8ncnrsi33b0yy3ig2ra7cufva
+        m: []
+        python_version: 3.11.14
+        t:
+            "1":
+                - 1
+                - 11
+                - 41
+                - 49
+                - 51
+                - 71
+                - 84
+                - 98
+            "2":
+                - 1
+                - 11
+                - 41
+                - 49
+                - 51
+                - 71
+                - 84
+                - 98
+            "3":
+                - 13
+                - 15
+                - 16
+            "4": 3.11.14
+            "5": 0.23.1
+            "6": 4.57.2
+            "8":
+                - 3
+            "12": 0.23.1
+            "13": windows-amd64
+base_model:
+    value: ./model/cpt_model
+batch_size:
+    value: 1
+gradient_accumulation:
+    value: 16
+learning_rate:
+    value: 1e-05
+lora_alpha:
+    value: 32
+lora_r:
+    value: 16
+max_seq_length:
+    value: 1024
+max_steps:
+    value: 100
+stage:
+    value: SFT
+vram:
+    value: 8GB

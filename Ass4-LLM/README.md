@@ -26,9 +26,16 @@ Ass4-LLM/
 
 ### 必要套件安裝
 
+pip install torch==2.9.1 torchvision==0.24.1 --index-url https://download.pytorch.org/whl/cu128
+pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+pip install --no-deps trl peft accelerate bitsandbytes
+pip install pandas datasets wandb scipy
+
+
 ```bash
 conda create -n Ass4 python=3.11 -y
 conda activate Ass4
+pip install -r requirements.txt
 
 # 1. 安裝 PyTorch nightly（支援 RTX 5050）
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
