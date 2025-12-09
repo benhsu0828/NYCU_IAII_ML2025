@@ -1,0 +1,44 @@
+{
+  "os":  "Windows-10-10.0.26200-SP0",
+  "python":  "CPython 3.11.14",
+  "startedAt":  "2025-12-09T03:10:02.117508Z",
+  "args":  [
+    "--run_sft",
+    "--run_inf"
+  ],
+  "program":  "C:\\Users\\bente\\OneDrive\\桌面\\NYCU_IAII_ML2025\\Ass4-LLM\\src\\main_CPT_SFT.py",
+  "codePath":  "Ass4-LLM\\src\\main_CPT_SFT.py",
+  "codePathLocal":  "main_CPT_SFT.py",
+  "git":  {
+    "remote":  "https://github.com/benhsu0828/NYCU_IAII_ML2025.git",
+    "commit":  "7be660e895586bdee4cf9948524fbf8cbfdd990d"
+  },
+  "email":  "benten.hsu@gmail.com",
+  "root":  "C:\\Users\\bente\\OneDrive\\桌面\\NYCU_IAII_ML2025\\Ass4-LLM\\src",
+  "host":  "ben",
+  "executable":  "C:\\Users\\bente\\miniconda3\\envs\\Ass4\\python.exe",
+  "cpu_count":  8,
+  "cpu_count_logical":  16,
+  "gpu":  "NVIDIA GeForce RTX 5050",
+  "gpu_count":  1,
+  "disk":  {
+    "/":  {
+      "total":  "511032946688",
+      "used":  "204042690560"
+    }
+  },
+  "memory":  {
+    "total":  "16340992000"
+  },
+  "gpu_nvidia":  [
+    {
+      "name":  "NVIDIA GeForce RTX 5050",
+      "memoryTotal":  "8546942976",
+      "cudaCores":  2560,
+      "architecture":  "Blackwell",
+      "uuid":  "GPU-b1c0431a-cc1f-6517-7e5a-48d0573e4eff"
+    }
+  ],
+  "cudaVersion":  "13.0",
+  "writerId":  "ubjnjqevffisn4o3rtv4abt6i5k1dbcx"
+}

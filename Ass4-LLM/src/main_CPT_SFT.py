@@ -44,102 +44,34 @@ def preprocess_taigi_text(text):
 
     return text
 
-def load_cpt_taigi_data(MAX_TEXT_LENGTH):
-    # 使用生成器函式，避免一次性將所有資料載入 RAM
-    def gen():
-        seen_hashes = set() # 使用雜湊值去重，比儲存完整文字省非常多記憶體
-        base_dir = "../data/IMA-Taiwan"
-        
-        # 檢查目錄是否存在
-        if not os.path.exists(base_dir):
-            print(f"警告: 目錄 {base_dir} 不存在")
-            return
-
-        for file_dir in os.listdir(base_dir):
-            dir_path = os.path.join(base_dir, file_dir)
-            if not os.path.isdir(dir_path):
-                continue
-
-            for file in os.listdir(dir_path):
-                if file.endswith(".json"):
-                    file_path = os.path.join(dir_path, file)
-                    # print(f"讀取: {file_dir}/{file}") # 減少 print 頻率以提升速度
-
-                    try:
-                        with open(file_path, 'r', encoding='utf-8') as f:
-                            json_data = json.load(f)
-
-                            # 暫存這個檔案處理後的文本列表
-                            processed_texts = []
-
-                            # 如果是 list，需要先合併同一篇文章
-                            if isinstance(json_data, list):
-                                if json_data and 'title' in json_data[0]:
-                                    from collections import defaultdict
-                                    articles = defaultdict(list)
-
-                                    for item in json_data:
-                                        if 'text' in item and 'title' in item:
-                                            articles[item['title']].append(item['text'])
-
-                                    for title, paragraphs in articles.items():
-                                        full_text = ''.join(paragraphs)
-                                        cleaned_text = preprocess_taigi_text(full_text)
-
-                                        if len(cleaned_text) >= 100:
-                                            if len(cleaned_text) > MAX_TEXT_LENGTH:
-                                                sentences = re.split(r'[。！？\n]+', cleaned_text)
-                                                current_chunk = ""
-                                                for sentence in sentences:
-                                                    sentence = sentence.strip()
-                                                    if not sentence: continue
-                                                    
-                                                    if len(current_chunk) + len(sentence) > MAX_TEXT_LENGTH:
-                                                        if len(current_chunk) >= 100:
-                                                            processed_texts.append(current_chunk)
-                                                        current_chunk = sentence + "。"
-                                                    else:
-                                                        current_chunk += sentence + "。"
-                                                
-                                                if len(current_chunk) >= 100:
-                                                    processed_texts.append(current_chunk)
-                                            else:
-                                                processed_texts.append(cleaned_text)
-
-                                else:
-                                    for item in json_data:
-                                        if 'text' in item:
-                                            cleaned_text = preprocess_taigi_text(item['text'])
-                                            if 50 <= len(cleaned_text) <= MAX_TEXT_LENGTH:
-                                                processed_texts.append(cleaned_text)
-
-                            elif isinstance(json_data, dict):
-                                if 'text' in json_data:
-                                    cleaned_text = preprocess_taigi_text(json_data['text'])
-                                    if 50 <= len(cleaned_text) <= MAX_TEXT_LENGTH:
-                                        processed_texts.append(cleaned_text)
-                            
-                            # 逐一 Yield 資料並去重
-                            for text in processed_texts:
-                                text_hash = hash(text) # 計算雜湊值
-                                if text_hash not in seen_hashes:
-                                    seen_hashes.add(text_hash)
-                                    yield {"text": text}
-                        # 每處理完一個檔案就清空暫存
-                        del processed_texts
-
-                    except Exception as e:
-                        print(f"讀取 {file_path} 時發生錯誤: {e}")
-        
-        # 釋放 set 記憶體
-        del seen_hashes
-        gc.collect()
-
-    print("開始建立 Dataset (Generator 模式)...")
-    # 使用 from_generator 建立資料集，這會將資料快取到硬碟而不是全部放在 RAM
-    cpt_dataset = IterableDataset.from_generator(gen)
+def load_cpt_taigi_data(preprocessed_file="../data/cpt_dataset.parquet"):
+    """
+    載入預處理好的 CPT 資料
     
-    print(f"\n最終訓練資料筆數: {len(cpt_dataset)}")
+    Args:
+        preprocessed_file: 預處理好的資料檔案路徑 (.parquet 或 .jsonl)
+    
+    Returns:
+        Dataset: 載入的資料集
+    """
+    if not os.path.exists(preprocessed_file):
+        print(f"⚠️  找不到預處理檔案: {preprocessed_file}")
+        print("請先執行: python preprocess_cpt_data.py")
+        raise FileNotFoundError(f"請先執行資料預處理腳本產生 {preprocessed_file}")
+    
+    print(f"📂 載入預處理資料: {preprocessed_file}")
+    
+    # 根據檔案格式載入
+    if preprocessed_file.endswith('.parquet'):
+        cpt_dataset = Dataset.from_parquet(preprocessed_file)
+    elif preprocessed_file.endswith('.jsonl') or preprocessed_file.endswith('.json'):
+        cpt_dataset = Dataset.from_json(preprocessed_file)
+    else:
+        raise ValueError("不支援的檔案格式，請使用 .parquet 或 .jsonl")
+    
+    print(f"✅ 載入完成！總筆數: {len(cpt_dataset)}")
+    print(f"📊 第一筆資料預覽: {cpt_dataset[0]['text'][:100]}...")
+    
     return cpt_dataset
 
 def inference(model_path, test_data, output_dir, max_seq_length, batch_size=2):
@@ -264,7 +196,7 @@ if __name__ == "__main__":
     unsloth/Qwen2.5-7B-Instruct, 
     unsloth/Yi-1.5-6B-Chat
     '''
-    model_name = "unsloth/Qwen2.5-7B-Instruct"
+    model_name = "unsloth/Qwen2.5-1.5B-Instruct"
     wandb_project_name = "Ass4-LLM"
     wandb_name1 = "Taigi-CPT-Qwen2.5-v1"
     wandb_name2 = "Taigi-SFT-Qwen2.5-v1"
@@ -296,8 +228,8 @@ if __name__ == "__main__":
             },
             tags=["CPT", "domain_adaptation"]
         )
-        # 載入並處理 CPT 台文資料
-        cpt_dataset = load_cpt_taigi_data(max_seq_length)
+        # 載入並處理 CPT 台文資料（使用預處理好的檔案）
+        cpt_dataset = load_cpt_taigi_data("../data/cpt_dataset.parquet")
 
         # ========== 階段 1: CPT - 持續預訓練 ==========
 
@@ -455,10 +387,9 @@ if __name__ == "__main__":
 
         model = FastLanguageModel.get_peft_model(
             model,
-            r = 8,
-            target_modules = ["q_proj", "k_proj", "v_proj", "o_proj",
-                            "gate_proj", "up_proj", "down_proj"],
-            lora_alpha = 16,
+            r = 4,  # 降低到 4 減少記憶體
+            target_modules = ["q_proj", "v_proj"],  # 只訓練 2 個模組
+            lora_alpha = 8,  # 對應調整
             lora_dropout = 0.1,
             bias = "none",
             use_gradient_checkpointing = "unsloth",
@@ -485,7 +416,7 @@ if __name__ == "__main__":
         sft_config = SFTConfig(
             dataset_text_field="text",  # 根據你的 dataset 欄位名稱改
             per_device_train_batch_size=1,
-            gradient_accumulation_steps=16,
+            gradient_accumulation_steps=8,
             warmup_steps=100,
             # 你之前用 max_steps，但新版建議用 num_train_epochs
             #num_train_epochs = 5,            # 視你資料量決定
