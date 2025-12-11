@@ -22,5 +22,5 @@ The model is already on multiple devices. Skipping the move to device specified 
 O^O/ \_/ \    Batch size per device = 1 | Gradient accumulation steps = 16
 \        /    Data Parallel GPUs = 1 | Total batch size (1 x 16 x 1) = 16
  "-____-"     Trainable parameters = 72,613,888 of 6,133,649,408 (1.18% trained)
-  0%|▏                                                                                                                | 6/3600 [03:15<31:27:24, 31.51s/it]
+  0%|▎                                                                                                                | 8/3600 [04:17<30:58:26, 31.04s/it]
 Unsloth: Will smartly offload gradients to save VRAM!
