@@ -194,17 +194,18 @@ if __name__ == "__main__":
     model available: 
     Bohanlu/Taigi-Llama-2-7B, 
     unsloth/Qwen2.5-7B-Instruct, 
-    unsloth/Yi-1.5-6B-Chat
+    unsloth/Yi-1.5-6B-bnb-4bit
     '''
-    model_name = "unsloth/Qwen2.5-1.5B-Instruct"
+    model_name = "unsloth/Yi-1.5-6B-bnb-4bit"
     wandb_project_name = "Ass4-LLM"
-    wandb_name1 = "Taigi-CPT-Qwen2.5-v1"
-    wandb_name2 = "Taigi-SFT-Qwen2.5-v1"
+    wandb_name1 = "Taigi-CPT-Yi_V2"
+    wandb_name2 = "Taigi-SFT-Yi_V2"
     max_seq_length = 1024
     random_seed = 9527
-    cpt_output_dir = "../model/Qwen2.5_cpt_model"
-    final_output_dir = "../model/Qwen2.5_final_model"
-    inference_output_dir = "../output_Qwen2.5.csv"
+    batch_size = 2
+    cpt_output_dir = "../model/Yi_cpt_model_V2"
+    final_output_dir = "../model/Yi_final_model_V2"
+    inference_output_dir = "../output_Yi_V2.csv"
     # 登入 wandb
     wandb.login(key="6505e7e06b7f53ea56b61b94658f226c523ebacc")
     # os.environ["WANDB_MODE"] = "offline"  # 避免網路問題
@@ -222,7 +223,7 @@ if __name__ == "__main__":
                 "lora_r": 64,
                 "lora_alpha": 128,
                 "max_seq_length": max_seq_length,
-                "batch_size": 1,  # 8GB 配置
+                "batch_size": batch_size,  # 8GB 配置
                 "gradient_accumulation": 16,
                 "vram": "8GB",
             },
@@ -262,12 +263,10 @@ if __name__ == "__main__":
 
         cpt_config = SFTConfig(
             dataset_text_field="text",  # 根據你的 dataset 欄位名稱改
-            per_device_train_batch_size=1,
+            per_device_train_batch_size= 1,
             gradient_accumulation_steps=16,
-            warmup_steps=100,
-            # 你之前用 max_steps，但新版建議用 num_train_epochs
-            #num_train_epochs = 50,            # 視你資料量決定
-            max_steps=1000,
+            warmup_steps=50,
+            num_train_epochs = 50,            # 視你資料量決定
             learning_rate=2e-4,
             weight_decay=0.01,
             optim="adamw_8bit",
@@ -277,13 +276,12 @@ if __name__ == "__main__":
             max_grad_norm=1.0,
             logging_steps=10,
             save_strategy="steps",
-            save_steps=200,
+            save_steps=500,
             save_total_limit=1,
             output_dir="outputs_cpt",
-            # windows 下 data loader 設定如下，減少可能錯誤
-            dataloader_pin_memory = False,
-            dataloader_num_workers = 0,
-            dataset_num_proc=1,
+            dataloader_pin_memory = True,
+            dataloader_num_workers = 4,
+            dataset_num_proc=4,
             seed=random_seed,
         )
 
@@ -293,35 +291,6 @@ if __name__ == "__main__":
             train_dataset=cpt_dataset,
             args=cpt_config,
         )
-        # cpt_trainer = SFTTrainer(
-        #     model = model,
-        #     processing_class = tokenizer,
-        #     train_dataset = cpt_dataset,
-        #     packing = False,
-        #     args = SFTConfig(
-        #         per_device_train_batch_size = 1,
-        #         gradient_accumulation_steps = 16,
-        #         warmup_steps = 100,
-        #         max_steps = 1000,  # CPT 需要更多步驟
-        #         learning_rate = 2e-4,  # CPT 用較高學習率
-        #         fp16 = False,
-        #         bf16 = True,
-        #         logging_steps = 10,
-        #         optim = "adamw_8bit",
-        #         weight_decay = 0.01,
-        #         lr_scheduler_type = "cosine",
-        #         seed = random_seed,
-        #         output_dir = "outputs_cpt",
-        #         report_to = "wandb",
-        #         run_name = "Taigi-CPT",
-        #         max_length = max_seq_length,
-        #         # 額外優化
-        #         max_grad_norm = 1.0,
-        #         dataloader_num_workers = 0,   # Windows 上設為 0
-        #         dataloader_pin_memory = False,  # 減少 RAM 使用
-        #         save_total_limit = 1,  # 只保留最後一個 checkpoint
-        #     ),
-        # )
 
         # 執行 CPT 訓練
         print("開始 CPT 階段訓練...")
@@ -415,7 +384,7 @@ if __name__ == "__main__":
         # SFT 訓練配置
         sft_config = SFTConfig(
             dataset_text_field="text",  # 根據你的 dataset 欄位名稱改
-            per_device_train_batch_size=1,
+            per_device_train_batch_size=batch_size,
             gradient_accumulation_steps=8,
             warmup_steps=100,
             # 你之前用 max_steps，但新版建議用 num_train_epochs
@@ -433,10 +402,9 @@ if __name__ == "__main__":
             save_steps=200,
             save_total_limit=1,
             output_dir="outputs_cpt",
-            # windows 下 data loader 設定如下，減少可能錯誤
-            dataloader_pin_memory = False,
-            dataloader_num_workers = 0,
-            dataset_num_proc=1,
+            dataloader_pin_memory = True,
+            dataloader_num_workers = 4,
+            dataset_num_proc=4,
             seed=random_seed,
         )
 
@@ -446,33 +414,6 @@ if __name__ == "__main__":
             train_dataset=sft_dataset,
             args=sft_config,  
         )
-        # # SFT 訓練配置
-        # sft_trainer = SFTTrainer(
-        #     model = model,
-        #     processing_class = tokenizer, 
-        #     train_dataset = sft_dataset,
-        #     packing = False,
-        #     args = SFTConfig(
-        #         per_device_train_batch_size = 1,
-        #         gradient_accumulation_steps = 16,
-        #         warmup_steps = 10,
-        #         max_steps = 100,  # SFT 步驟較少
-        #         learning_rate = 1e-5,  # SFT 用較小學習率
-        #         fp16 = False,
-        #         bf16 = True,
-        #         logging_steps = 1,
-        #         optim = "adamw_8bit",
-        #         weight_decay = 0.01,
-        #         lr_scheduler_type = "cosine",
-        #         seed = random_seed,
-        #         output_dir = "outputs_sft",
-        #         report_to = "wandb",
-        #         run_name = "Taigi-SFT",
-        #         max_length = max_seq_length,
-        #         dataloader_num_workers = 0,
-        #         dataloader_pin_memory = False,
-        #     ),
-        # )
 
         # 執行 SFT 訓練
         print("開始 SFT 階段訓練...")
@@ -484,6 +425,15 @@ if __name__ == "__main__":
         print("SFT 階段完成！")
 
         sft_run.finish()
+        # 清理記憶體
+        del cpt_trainer
+        del model
+        del tokenizer
+        del cpt_dataset
+        gc.collect()
+        torch.cuda.empty_cache()
+        # 等待 3 秒讓系統釋放記憶體
+        time.sleep(3)
     else:
         print("跳過 SFT 階段")
 
@@ -505,7 +455,7 @@ if __name__ == "__main__":
             test_data = "../data/1001-question-v3.csv",
             output_dir = inference_output_dir,
             max_seq_length = max_seq_length,
-            batch_size = 2
+            batch_size = 3
         )
     else:
         print("跳過推理測試階段")

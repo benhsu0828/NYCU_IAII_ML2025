@@ -1,0 +1,22 @@
+{
+  "os":  "Linux-6.8.0-87-generic-x86_64-with-glibc2.35",
+  "python":  "CPython 3.11.14",
+  "startedAt":  "2025-12-11T14:11:14.976373Z",
+  "args":  [
+    "--run_cpt",
+    "--run_sft",
+    "--run_inf"
+  ],
+  "program":  "/home/ben/桌面/NYCU_IAII_ML2025/Ass4-LLM/src/./main_CPT_SFT.py",
+  "codePath":  "Ass4-LLM/src/main_CPT_SFT.py",
+  "codePathLocal":  "main_CPT_SFT.py",
+  "git":  {
+    "remote":  "https://github.com/benhsu0828/NYCU_IAII_ML2025.git",
+    "commit":  "269f6b0bddee2ff46f478963e81a4be89ea41dd5"
+  },
+  "email":  "benten.hsu@gmail.com",
+  "root":  "/home/ben/桌面/NYCU_IAII_ML2025/Ass4-LLM/src",
+  "host":  "ben-LAB",
+  "executable":  "/home/ben/miniconda3/envs/Ass4/bin/python",
+  "writerId":  "jol5dsdkd6rdkeryut7eq353khl2yfu1"
+}

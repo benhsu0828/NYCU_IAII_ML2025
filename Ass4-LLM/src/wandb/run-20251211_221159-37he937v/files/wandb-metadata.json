@@ -1,0 +1,45 @@
+{
+  "os":  "Linux-6.8.0-87-generic-x86_64-with-glibc2.35",
+  "python":  "CPython 3.11.14",
+  "startedAt":  "2025-12-11T14:11:59.027979Z",
+  "args":  [
+    "--run_cpt",
+    "--run_sft",
+    "--run_inf"
+  ],
+  "program":  "/home/ben/桌面/NYCU_IAII_ML2025/Ass4-LLM/src/./main_CPT_SFT.py",
+  "codePath":  "Ass4-LLM/src/main_CPT_SFT.py",
+  "codePathLocal":  "main_CPT_SFT.py",
+  "git":  {
+    "remote":  "https://github.com/benhsu0828/NYCU_IAII_ML2025.git",
+    "commit":  "269f6b0bddee2ff46f478963e81a4be89ea41dd5"
+  },
+  "email":  "benten.hsu@gmail.com",
+  "root":  "/home/ben/桌面/NYCU_IAII_ML2025/Ass4-LLM/src",
+  "host":  "ben-LAB",
+  "executable":  "/home/ben/miniconda3/envs/Ass4/bin/python",
+  "cpu_count":  8,
+  "cpu_count_logical":  16,
+  "gpu":  "NVIDIA Graphics Device",
+  "gpu_count":  1,
+  "disk":  {
+    "/":  {
+      "total":  "502392610816",
+      "used":  "57228509184"
+    }
+  },
+  "memory":  {
+    "total":  "15936311296"
+  },
+  "gpu_nvidia":  [
+    {
+      "name":  "NVIDIA Graphics Device",
+      "memoryTotal":  "8546942976",
+      "cudaCores":  2560,
+      "architecture":  "Blackwell",
+      "uuid":  "GPU-b1c0431a-cc1f-6517-7e5a-48d0573e4eff"
+    }
+  ],
+  "cudaVersion":  "12.8",
+  "writerId":  "zhn0ee6xo9t7h8dflb34xlz95hpgmwzd"
+}
